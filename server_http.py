@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.requests import Request
@@ -14,7 +15,12 @@ from tools.schemas import tool_list
 from tools.handlers import dispatch
 
 server = Server("bosscore")
-sse = SseServerTransport("/messages/")
+sse = SseServerTransport(
+    "/messages/",
+    security_settings=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
+)
 
 
 @server.list_tools()
@@ -42,7 +48,7 @@ def main():
     args = parser.parse_args()
 
     app = Starlette(routes=[
-        Route("/sse", endpoint=handle_sse, methods=["GET"]),
+        Route("/sse/", endpoint=handle_sse, methods=["GET"]),
         Mount("/messages/", app=sse.handle_post_message),
     ])
 
