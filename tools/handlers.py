@@ -607,7 +607,7 @@ async def boss_deploy(args: dict) -> list[TextContent]:
 
 # ── GIT VERSION CONTROL ──────────────────────────────────────────────────────────
 
-async def boss_git_commit(args: dict) -> list[TextContent]:
+async def boss_git_push(args: dict) -> list[TextContent]:
     """Git add + commit + push pour companies. Retourne la commande bash à exécuter."""
     message = args.get("message", "")
     if not message:
@@ -650,7 +650,7 @@ _HANDLERS = {
     "file_reader_list_directory": file_reader_list_directory, "file_reader_get_file_info": file_reader_get_file_info,
     "file_reader_search_in_file": file_reader_search_in_file,
     "boss_deploy": boss_deploy,
-    "boss_git_commit": boss_git_commit,
+    "boss_git_push": boss_git_push,
 }
 
 async def dispatch(name: str, arguments: dict) -> list[TextContent]:
