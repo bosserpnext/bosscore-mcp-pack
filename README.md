@@ -1,50 +1,56 @@
 # BOSSCORE MCP PACK
 
-Paquet modulaire de capacités MCP pour l’écosystème BOSS. Il absorbe
-progressivement les anciens serveurs monofichiers `mcp-wordpress-bridge.py` et
-`mcp-file-reader.py` sans coupler l’intelligence réutilisable au protocole MCP.
+Paquet modulaire de capacités MCP pour l'écosystème BOSS — WordPress, fichiers,
+déploiement cPanel. **Cross-platform Windows + Linux.**
 
 ## Principes
 
-- **Un paquet, plusieurs profils** : `wordpress`, `files` et `full`.
-- **MCP reste une façade** : clients, extracteurs et politiques sont importables
-  par un worker, une API ou un autre paquet.
-- **Moindre privilège** : les chemins locaux et les hôtes distants sont bornés.
-- **Dépendances paresseuses** : OCR, vision et transcription ne sont chargés
-  que lorsqu’un outil les demande.
-- **Contrats stables** : les 61 noms d’outils historiques sont conservés pendant
-  la migration.
+- **63 outils** : 55 WordPress/Astra + 6 File Reader + 2 BOSS (`boss_git_push`, `boss_deploy`)
+- **Un paquet, plusieurs profils** : `wordpress`, `files`, `full`
+- **Deux modes de transport** : stdio (OpenCode/Codex/Claude) + HTTP/SSE (chatgpt.com)
+- **Cross-platform** : détection auto de l'OS, chemins adaptés, Tesseract Linux/Windows
+- **Moindre privilège** : chemins locaux et hôtes distants bornés
 
-## Lancement
+## Lancement — stdio (OpenCode, Codex, Claude Desktop)
 
+### Windows (PowerShell)
 ```powershell
-$env:BOSSCORE_MCP_PROFILE = "wordpress"
-$env:WORDPRESS_URL = "https://example.com"
-$env:WORDPRESS_USERNAME = "..."
+$env:WORDPRESS_URL = "https://core.bosserpnext.com"
+$env:WORDPRESS_USERNAME = "boss"
 $env:WORDPRESS_APP_PASSWORD = "..."
-python.exe C:\Users\Takoudjou\.config\opencode\bosscore-mcp-pack\server.py
+$env:DEPLOY_TOKEN = "..."
+$env:BOSSCORE_WORKSPACE = "H:\...\in-infrastructure-management"
+python.exe server.py
 ```
 
-Pour le lecteur de fichiers, les racines sont obligatoires :
-
-```powershell
-$env:BOSSCORE_MCP_PROFILE = "files"
-$env:BOSSCORE_FILE_ROOTS = "H:\Documents;C:\Users\Takoudjou\Downloads"
-python.exe C:\Users\Takoudjou\.config\opencode\bosscore-mcp-pack\server.py
+### Linux / VPS (bash)
+```bash
+export WORDPRESS_URL="https://core.bosserpnext.com"
+export WORDPRESS_USERNAME="boss"
+export WORDPRESS_APP_PASSWORD="..."
+export DEPLOY_TOKEN="..."
+export BOSSCORE_WORKSPACE="/home/bomoja/repos/companies"
+python3 server.py
 ```
 
-Les dossiers nommés `credentials` et les chemins `_\zip` restent interdits,
-même lorsqu’ils se trouvent sous une racine autorisée.
+## Lancement — HTTP/SSE (chatgpt.com)
 
-## Profils
+```bash
+# Sur le VPS
+source ~/repos/companies/.env
+python3 server_http.py --host 127.0.0.1 --port 8765
 
-| Profil | Capacités |
-|---|---|
-| `wordpress` | REST WordPress, BOSSCORE/Astra |
-| `files` | lecture et extraction documentaire locale |
-| `full` | réunion explicite des deux profils |
+# Puis configurer chatgpt.com :
+# Settings → Apps & Connectors → Add custom connector
+# URL: https://vps.bosserpnext.com/sse  (via proxy NGINX)
+# ou:  http://VPS_IP:8765/sse            (via tunnel SSH)
+```
 
-`wp_raw_request` n’accepte plus d’URL absolue. `wp_upload_media` refuse les
-adresses privées, locales ou réservées afin d’empêcher les requêtes réseau
-internes involontaires.
+## Différences Windows / Linux
 
+| Comportement | Windows | Linux |
+|---|---|---|
+| `boss_git_push` | Retourne commande bash | Exécute git directement (subprocess) |
+| Tesseract OCR | `C:\Program Files\Tesseract-OCR\tesseract.exe` | `tesseract` dans PATH |
+| Workspace par défaut | `H:\...\in-infrastructure-management` | `~/repos/companies` |
+| Séparateur FILE_ROOTS | `;` | `:` |
