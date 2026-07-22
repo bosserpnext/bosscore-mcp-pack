@@ -1,6 +1,6 @@
 """Handlers BOSSCORE MCP PACK — WordPress + Fichiers + Déploiement cPanel."""
 
-import json, os, sys, logging, base64, mimetypes, tempfile, subprocess, asyncio
+import json, os, sys, logging, base64, mimetypes, tempfile, asyncio
 from typing import Any
 
 import httpx
@@ -608,9 +608,7 @@ async def boss_deploy(args: dict) -> list[TextContent]:
 # ── GIT VERSION CONTROL ──────────────────────────────────────────────────────────
 
 async def boss_git_push(args: dict) -> list[TextContent]:
-    """Git add + commit + push dans le workspace companies.
-    Args: message (commit message), path (optionnel, relatif au workspace).
-    """
+    """Git add + commit + push dans le workspace companies."""
     message = args.get("message", "")
     if not message:
         return _err("Paramètre 'message' requis.")
@@ -620,49 +618,54 @@ async def boss_git_push(args: dict) -> list[TextContent]:
     if not os.path.isdir(ws):
         return _err(f"BOSSCORE_WORKSPACE introuvable : {ws}")
 
-    def _run(cmd, **kw):
-        return subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=kw.pop("timeout", 30), **kw)
+    async def _git(cmd: list[str]) -> tuple[int, str, str]:
+        """Run git command, return (returncode, stdout, stderr)."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=ws,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
     output = []
     try:
         # git add
-        cmd = ["git", "add"]
-        cmd.append(rel_path if rel_path else "-A")
-        r = await asyncio.to_thread(_run, cmd)
+        cmd = ["git", "add", rel_path if rel_path else "-A"]
+        rc, _, err = await _git(cmd)
         output.append(f"$ git add {'-A' if not rel_path else rel_path}")
-        if r.returncode != 0:
-            return _err(f"git add failed: {r.stderr.strip()}")
+        if rc != 0:
+            return _err(f"git add failed: {err.strip()}")
 
         # git status
-        r = await asyncio.to_thread(_run, ["git", "status", "--short"], timeout=10)
-        if r.stdout.strip():
-            output.append(f"Staged:\n{r.stdout.strip()}")
+        rc, out, _ = await _git(["git", "status", "--short"])
+        if out.strip():
+            output.append(f"Staged:\n{out.strip()}")
         else:
             output.append("(nothing to commit — working tree clean)")
 
         # git commit
-        r = await asyncio.to_thread(_run, ["git", "commit", "-m", message], timeout=30)
+        rc, out, err = await _git(["git", "commit", "-m", message])
         output.append(f"\n$ git commit -m \"{message}\"")
-        out = r.stderr.strip() if r.stderr else r.stdout.strip()
-        output.append(out)
-        if r.returncode != 0:
-            combined = (r.stdout + r.stderr).lower()
-            if "nothing to commit" in combined or "rien" in combined or "nothing" in combined:
+        combined = out + err
+        output.append(combined.strip())
+        if rc != 0:
+            if "nothing to commit" in combined.lower() or "rien" in combined.lower():
                 output.append("\n(working tree clean — nothing to push)")
                 return _ok("\n".join(output))
-            return _err(f"git commit failed: {out}")
+            return _err(f"git commit failed: {combined.strip()}")
 
         # git push
-        r = await asyncio.to_thread(_run, ["git", "push", "origin", "master"], timeout=120)
+        rc, out, err = await _git(["git", "push", "origin", "master"])
         output.append(f"\n$ git push origin master")
-        out = r.stderr.strip() if r.stderr else r.stdout.strip()
-        output.append(out)
-        if r.returncode != 0:
-            return _err(f"git push failed: {out}")
+        combined = out + err
+        output.append(combined.strip())
+        if rc != 0:
+            return _err(f"git push failed: {combined.strip()}")
 
         output.append("\nPush OK.")
         return _ok("\n".join(output))
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         return _err("Git operation timed out (120s).")
     except Exception as e:
         return _err(f"Git error: {e}")
