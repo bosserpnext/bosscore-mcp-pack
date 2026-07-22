@@ -1,0 +1,146 @@
+"""Schémas des outils BOSSCORE MCP PACK — WordPress + Fichiers + Déploiement."""
+
+from mcp.types import Tool
+
+_SCHEMA = {
+    "id":          {"type": "integer"},
+    "title":       {"type": "string"},
+    "content":     {"type": "string"},
+    "status":      {"type": "string"},
+    "slug":        {"type": "string"},
+    "name":        {"type": "string"},
+    "url":         {"type": "string"},
+    "email":       {"type": "string"},
+    "password":    {"type": "string"},
+    "username":    {"type": "string"},
+    "meta":        {"type": "object"},
+    "settings":    {"type": "object"},
+    "menu_locations": {"type": "object"},
+    "theme_mods":  {"type": "object"},
+    "merge":       {"type": "boolean"},
+    "menu_id":     {"type": "integer"},
+    "source_url":  {"type": "string"},
+    "location":    {"type": "string"},
+    "order":       {"type": "integer"},
+    "endpoint":    {"type": "string"},
+    "method":      {"type": "string"},
+    "body":        {"type": "string"},
+    "post":        {"type": "integer"},
+    "parent":      {"type": "integer"},
+    "author_name": {"type": "string"},
+    "author_email":{"type": "string"},
+    "query":       {"type": "string"},
+    "per_page":    {"type": "integer"},
+    "type":        {"type": "string"},
+    "subtype":     {"type": "string"},
+    "reassign":    {"type": "integer"},
+    "roles":       {"type": "array"},
+    "alt_text":    {"type": "string"},
+    "caption":     {"type": "string"},
+    "description": {"type": "string"},
+    "limit":       {"type": "integer"},
+    "path":        {"type": "string"},
+    "pattern":     {"type": "string"},
+    "repo":        {"type": "string"},
+    "key":         {"type": "string"},
+    "button":      {"type": "string"},
+    "bg_color":    {"type": "string"},
+    "text_color":  {"type": "string"},
+    "bg_hover_color": {"type": "string"},
+    "radius":      {"type": "string"},
+    "font_size":   {"type": "string"},
+    "logged_out_text": {"type": "string"},
+    "logged_in_text":  {"type": "string"},
+    "login_url":   {"type": "string"},
+    "logout_url":  {"type": "string"},
+    "login_style": {"type": "string"},
+    "logout_style":{"type": "string"},
+    "area":        {"type": "string"},
+    "section":     {"type": "string"},
+    "slot":        {"type": "string"},
+    "items":       {"type": "array", "items": {"type": "string"}},
+}
+
+S = _SCHEMA  # alias
+
+def tool_list() -> list[Tool]:
+    return [
+        # ── WORDPRESS PAGES ──────────────────────────────────────
+        Tool(name="wp_list_pages", description="List all WordPress pages", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_page", description="Get a page by ID with content and meta", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_create_page", description="Create a new WordPress page", inputSchema={"type": "object", "properties": {"title": S["title"], "content": S["content"], "status": S["status"]}, "required": ["title"]}),
+        Tool(name="wp_update_page", description="Update a page: title, content, status, or meta", inputSchema={"type": "object", "properties": {"id": S["id"], "title": S["title"], "content": S["content"], "status": S["status"], "meta": S["meta"]}, "required": ["id"]}),
+        Tool(name="wp_delete_page", description="Delete a page permanently", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        # ── WORDPRESS POSTS ──────────────────────────────────────
+        Tool(name="wp_list_posts", description="List WordPress blog posts", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_post", description="Get a blog post by ID", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_create_post", description="Create a new blog post", inputSchema={"type": "object", "properties": {"title": S["title"], "content": S["content"], "status": S["status"]}, "required": ["title"]}),
+        Tool(name="wp_update_post", description="Update a blog post", inputSchema={"type": "object", "properties": {"id": S["id"], "title": S["title"], "content": S["content"], "status": S["status"]}, "required": ["id"]}),
+        Tool(name="wp_delete_post", description="Delete a blog post permanently", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        # ── WORDPRESS MEDIA ──────────────────────────────────────
+        Tool(name="wp_list_media", description="List media library items", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_media", description="Get media item by ID with URLs", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_upload_media", description="Upload media from a public URL", inputSchema={"type": "object", "properties": {"source_url": S["source_url"], "title": S["title"]}, "required": ["source_url"]}),
+        Tool(name="wp_update_media", description="Update media metadata (title, alt text, caption)", inputSchema={"type": "object", "properties": {"id": S["id"], "title": S["title"], "alt_text": S["alt_text"], "caption": S["caption"]}, "required": ["id"]}),
+        Tool(name="wp_delete_media", description="Delete a media item permanently", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        # ── WORDPRESS USERS ──────────────────────────────────────
+        Tool(name="wp_list_users", description="List users (may require elevated permissions)", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_user", description="Get user by ID", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_get_user_me", description="Get current authenticated user info", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_create_user", description="Create a new WordPress user", inputSchema={"type": "object", "properties": {"username": S["username"], "password": S["password"], "email": S["email"]}, "required": ["username", "password"]}),
+        Tool(name="wp_update_user", description="Update a user (name, email, password, roles)", inputSchema={"type": "object", "properties": {"id": S["id"], "name": S["name"], "email": S["email"], "password": S["password"], "roles": S["roles"]}, "required": ["id"]}),
+        Tool(name="wp_delete_user", description="Delete a user, reassigning content to another user", inputSchema={"type": "object", "properties": {"id": S["id"], "reassign": S["reassign"]}, "required": ["id"]}),
+        # ── WORDPRESS COMMENTS ───────────────────────────────────
+        Tool(name="wp_list_comments", description="List recent comments, optionally filtered by post", inputSchema={"type": "object", "properties": {"post": S["post"]}}),
+        Tool(name="wp_create_comment", description="Create a new comment on a post", inputSchema={"type": "object", "properties": {"post": S["post"], "content": S["content"], "author_name": S["author_name"], "author_email": S["author_email"], "parent": S["parent"]}, "required": ["post", "content"]}),
+        Tool(name="wp_update_comment", description="Moderate a comment (approve/trash/spam)", inputSchema={"type": "object", "properties": {"id": S["id"], "status": S["status"]}, "required": ["id"]}),
+        # ── WORDPRESS TAXONOMIES ─────────────────────────────────
+        Tool(name="wp_list_categories", description="List all categories", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_create_category", description="Create a new category", inputSchema={"type": "object", "properties": {"name": S["name"], "slug": S["slug"], "description": S["description"]}, "required": ["name"]}),
+        Tool(name="wp_update_category", description="Update a category name or description", inputSchema={"type": "object", "properties": {"id": S["id"], "name": S["name"], "slug": S["slug"], "description": S["description"]}, "required": ["id"]}),
+        Tool(name="wp_delete_category", description="Delete a category permanently", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_list_tags", description="List all tags", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_create_tag", description="Create a new tag", inputSchema={"type": "object", "properties": {"name": S["name"], "slug": S["slug"], "description": S["description"]}, "required": ["name"]}),
+        # ── WORDPRESS MENUS ──────────────────────────────────────
+        Tool(name="wp_list_menus", description="List navigation menus", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_menu", description="Get a navigation menu by ID", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_create_menu", description="Create a new navigation menu", inputSchema={"type": "object", "properties": {"name": S["name"]}, "required": ["name"]}),
+        Tool(name="wp_get_menu_items", description="Get items for a menu", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_create_menu_item", description="Add item to a menu", inputSchema={"type": "object", "properties": {"title": S["title"], "url": S["url"], "menu_id": S["menu_id"], "order": S["order"]}, "required": ["title", "url", "menu_id"]}),
+        Tool(name="wp_get_menu_locations", description="Get all menu locations and their assigned menus", inputSchema={"type": "object", "properties": {}}),
+        # ── WORDPRESS SETTINGS ───────────────────────────────────
+        Tool(name="wp_get_settings", description="Get site settings (title, description, timezone, etc.)", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_update_settings", description="Update site settings", inputSchema={"type": "object", "properties": {"title": S["title"], "description": S["title"], "timezone": S["title"]}}),
+        Tool(name="wp_get_site_info", description="Get WordPress site info: version, routes, namespaces", inputSchema={"type": "object", "properties": {}}),
+        # ── WORDPRESS BLOCKS ─────────────────────────────────────
+        Tool(name="wp_list_blocks", description="List reusable blocks/patterns", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_get_block", description="Get a reusable block by ID with content", inputSchema={"type": "object", "properties": {"id": S["id"]}, "required": ["id"]}),
+        Tool(name="wp_create_block", description="Create a reusable block", inputSchema={"type": "object", "properties": {"title": S["title"], "content": S["content"]}, "required": ["title", "content"]}),
+        Tool(name="wp_update_block", description="Update a reusable block content", inputSchema={"type": "object", "properties": {"id": S["id"], "title": S["title"], "content": S["content"]}, "required": ["id"]}),
+        # ── WORDPRESS SEARCH / THEMES ────────────────────────────
+        Tool(name="wp_search", description="Search posts, pages, and other content by query", inputSchema={"type": "object", "properties": {"query": S["query"], "type": S["type"], "subtype": S["subtype"], "per_page": S["per_page"]}, "required": ["query"]}),
+        Tool(name="wp_list_themes", description="List themes (active + available)", inputSchema={"type": "object", "properties": {}}),
+        # ── ASTRA ────────────────────────────────────────────────
+        Tool(name="wp_astra_get_settings", description="Get all Astra theme settings (header, footer, colors, typography)", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_astra_update_settings", description="Update Astra theme settings. Use merge=true (default) to merge with existing, false to replace. Supports menu_locations and theme_mods.", inputSchema={"type": "object", "properties": {"settings": S["settings"], "merge": S["merge"], "menu_locations": S["menu_locations"], "theme_mods": S["theme_mods"]}, "required": ["settings"]}),
+        Tool(name="wp_astra_set_menu_location", description="Assign a menu to an Astra header/footer location", inputSchema={"type": "object", "properties": {"menu_id": S["id"], "location": S["location"]}, "required": ["menu_id", "location"]}),
+        Tool(name="wp_astra_get_setting", description="Get a single Astra setting by its key name (e.g. header-button1-text)", inputSchema={"type": "object", "properties": {"key": S["key"]}, "required": ["key"]}),
+        Tool(name="wp_astra_get_header_builder", description="Get the current header builder layout — slot assignments for desktop and mobile", inputSchema={"type": "object", "properties": {}}),
+        Tool(name="wp_astra_set_header_item", description="Set component(s) in a header slot. e.g. area=desktop, section=primary, slot=primary_right, items=[\"button-1\"]", inputSchema={"type": "object", "properties": {"area": S["area"], "section": S["section"], "slot": S["slot"], "items": S["items"]}, "required": ["area", "section", "slot", "items"]}),
+        Tool(name="wp_astra_configure_button", description="Batch-configure a header button: text, link, colors, radius, size.", inputSchema={"type": "object", "properties": {"button": S["button"], "text": S["text"], "url": S["url"], "bg_color": S["bg_color"], "text_color": S["text_color"], "bg_hover_color": S["bg_hover_color"], "radius": S["radius"], "font_size": S["font_size"]}, "required": ["button"]}),
+        Tool(name="wp_astra_configure_account", description="Configure the Astra account widget — shows login link when logged out, profile link when logged in.", inputSchema={"type": "object", "properties": {"logged_out_text": S["logged_out_text"], "logged_in_text": S["logged_in_text"], "login_url": S["login_url"], "logout_url": S["logout_url"], "login_style": S["login_style"], "logout_style": S["logout_style"]}}),
+        # ── WORDPRESS UTILITY ────────────────────────────────────
+        Tool(name="wp_raw_request", description="Make any authenticated WP REST API request. endpoint=/wp/v2/pages or full URL", inputSchema={"type": "object", "properties": {"endpoint": S["endpoint"], "method": S["method"], "body": S["body"]}, "required": ["endpoint"]}),
+        Tool(name="wp_get_rest_index", description="Get the WP REST API index (all available routes)", inputSchema={"type": "object", "properties": {}}),
+
+        # ── FILE READER ──────────────────────────────────────────
+        Tool(name="file_reader_read_file", description="Read any file: PDF, DOCX, PPTX, XLSX, images, audio, text, CSV, HTML, Markdown. Auto-detect format.", inputSchema={"type": "object", "properties": {"path": S["path"], "limit": S["limit"]}, "required": ["path"]}),
+        Tool(name="file_reader_read_image", description="Read an image file and return base64 data with MIME type", inputSchema={"type": "object", "properties": {"path": S["path"]}, "required": ["path"]}),
+        Tool(name="file_reader_convert_to_markdown", description="Convert any document (PDF, DOCX, PPTX, XLSX, HTML) to clean markdown text", inputSchema={"type": "object", "properties": {"path": S["path"], "limit": S["limit"]}, "required": ["path"]}),
+        Tool(name="file_reader_list_directory", description="List files and subdirectories in a directory", inputSchema={"type": "object", "properties": {"path": S["path"], "limit": S["limit"]}, "required": ["path"]}),
+        Tool(name="file_reader_get_file_info", description="Get metadata about a file (size, type, modified date)", inputSchema={"type": "object", "properties": {"path": S["path"]}, "required": ["path"]}),
+        Tool(name="file_reader_search_in_file", description="Search for a pattern in a file's content (supports PDF, DOCX, etc.)", inputSchema={"type": "object", "properties": {"path": S["path"], "pattern": S["pattern"], "limit": S["limit"]}, "required": ["path", "pattern"]}),
+
+        # ── cPanel DEPLOY ────────────────────────────────────────
+        Tool(name="boss_deploy", description="Déploie le code BOSS sur cPanel (git pull + rsync). repo: bosscore, telet, ou all.", inputSchema={"type": "object", "properties": {"repo": S["repo"]}, "required": ["repo"]}),
+    ]

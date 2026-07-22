@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bosscore-mcp-pack"
+version = "0.1.0"
+description = "Modular MCP capability pack for BOSSCORE"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28,<1",
+  "mcp>=1.28,<2",
+]
+
+[project.optional-dependencies]
+documents = [
+  "markitdown>=0.1,<1",
+  "pillow>=10,<13",
+  "pypdf>=5,<7",
+  "pytesseract>=0.3,<1",
+]
+audio = [
+  "faster-whisper>=1,<2",
+  "moviepy>=2,<3",
+]
+all = [
+  "bosscore-mcp-pack[documents,audio]",
+]
+dev = [
+  "pytest>=8,<10",
+]
+
+[project.scripts]
+bosscore-mcp = "bosscore_mcp.server:cli"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
