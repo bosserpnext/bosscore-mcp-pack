@@ -402,8 +402,8 @@ def _lazy_imports():
         from markitdown import MarkItDown; _MARKDOWN = MarkItDown()
         try:
             import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe" if _IS_WINDOWS else "tesseract"
-_OCR_AVAIL = os.path.exists(pytesseract.pytesseract.tesseract_cmd) or (not _IS_WINDOWS and _which("tesseract") is not None)
+            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe" if _IS_WINDOWS else "tesseract"
+            _OCR_AVAIL = os.path.exists(pytesseract.pytesseract.tesseract_cmd) or (not _IS_WINDOWS and _which("tesseract") is not None)
         except Exception:
             pass
 
