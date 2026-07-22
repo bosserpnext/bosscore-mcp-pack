@@ -1,6 +1,6 @@
 """Handlers BOSSCORE MCP PACK — WordPress + Fichiers + Déploiement cPanel."""
 
-import json, os, sys, logging, base64, mimetypes, tempfile, asyncio
+import json, os, sys, logging, base64, mimetypes, tempfile, asyncio, platform, subprocess
 from typing import Any
 
 import httpx
@@ -16,7 +16,10 @@ WP_USER = os.environ.get("WORDPRESS_USERNAME", "")
 WP_PASS = os.environ.get("WORDPRESS_APP_PASSWORD", "")
 DEPLOY_TOKEN  = os.environ.get("DEPLOY_TOKEN", "")
 DEPLOY_URL    = "https://core.bosserpnext.com/deploy.php"
-BOSSCORE_WS   = os.environ.get("BOSSCORE_WORKSPACE", r"H:\Documents\Uncompressed\byContext\ResearchCenter\FetichesDesSciences\pratique\in-infrastructure-management")
+_IS_WINDOWS = platform.system() == "Windows"
+_DEFAULT_WS_WIN = r"H:\Documents\Uncompressed\byContext\ResearchCenter\FetichesDesSciences\pratique\in-infrastructure-management"
+_DEFAULT_WS_NIX = os.path.expanduser("~/repos/companies")
+BOSSCORE_WS   = os.environ.get("BOSSCORE_WORKSPACE", _DEFAULT_WS_WIN if _IS_WINDOWS else _DEFAULT_WS_NIX)
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +28,13 @@ def _ok(data: Any) -> list[TextContent]:
 
 def _err(msg: str) -> list[TextContent]:
     return [TextContent(type="text", text=f"Error: {msg}")]
+
+def _which(cmd: str) -> str | None:
+    """Locate executable in PATH (cross-platform)."""
+    if _IS_WINDOWS:
+        import shutil
+        return shutil.which(cmd)
+    return subprocess.run(["which", cmd], capture_output=True, text=True).stdout.strip() or None
 
 def _paged(endpoint: str, per_page: int = 50) -> str:
     sep = "&" if "?" in endpoint else "?"
@@ -392,8 +402,8 @@ def _lazy_imports():
         from markitdown import MarkItDown; _MARKDOWN = MarkItDown()
         try:
             import pytesseract
-            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-            _OCR_AVAIL = os.path.exists(pytesseract.pytesseract.tesseract_cmd)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe" if _IS_WINDOWS else "tesseract"
+_OCR_AVAIL = os.path.exists(pytesseract.pytesseract.tesseract_cmd) or (not _IS_WINDOWS and _which("tesseract") is not None)
         except Exception:
             pass
 
@@ -608,14 +618,30 @@ async def boss_deploy(args: dict) -> list[TextContent]:
 # ── GIT VERSION CONTROL ──────────────────────────────────────────────────────────
 
 async def boss_git_push(args: dict) -> list[TextContent]:
-    """Git add + commit + push pour companies. Retourne la commande bash à exécuter."""
+    """Git add + commit + push pour companies.
+    Sur Linux : exécute directement. Sur Windows : retourne la commande bash."""
     message = args.get("message", "")
     if not message:
         return _err("Paramètre 'message' requis.")
     rel = args.get("path", "").lstrip("/").lstrip("\\")
-    ws = BOSSCORE_WS
     add = f"git add {rel}" if rel else "git add -A"
-    return _ok(f"bash({add} && git commit -m \"{message}\" && git push origin master, workdir=\"{ws}\")")
+
+    if not _IS_WINDOWS:
+        # Linux/VPS — exécution directe
+        try:
+            cmd = f"{add} && git commit -m \"{message}\" && git push origin master"
+            result = subprocess.run(cmd, shell=True, cwd=BOSSCORE_WS,
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                return _ok(result.stdout.strip() or "Push OK.")
+            return _err(f"Git push failed (rc={result.returncode}): {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            return _err("Git push: timeout (60s)")
+        except Exception as e:
+            return _err(f"Git push: {e}")
+
+    # Windows — retourne la commande pour l'outil bash natif
+    return _ok(f"bash({add} && git commit -m \"{message}\" && git push origin master, workdir=\"{BOSSCORE_WS}\")")
 
 # ── DISPATCH ────────────────────────────────────────────────────────────────────
 
