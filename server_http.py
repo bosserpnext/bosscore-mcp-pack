@@ -8,7 +8,7 @@ sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(_
 from mcp.server import Server
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 from starlette.applications import Starlette
-from starlette.routing import Route
+from starlette.routing import Mount
 
 from tools.schemas import tool_list
 from tools.handlers import dispatch
@@ -26,13 +26,12 @@ async def handle_call_tool(name, arguments):
     return await dispatch(name, arguments)
 
 
-async def handle_mcp(scope, receive, send):
-    """ASGI raw handler — Streamable HTTP (POST) + fallback SSE legacy (GET).
-    handle_request() gère les deux protocoles : si le POST InitializeRequest
-    arrive, Streamable HTTP ; si GET, fallback SSE avec endpoint event.
-    mcp_session_id=None = mode stateless (MCP 2026-07-28)."""
-    transport = StreamableHTTPServerTransport(mcp_session_id=None)
-    await transport.handle_request(scope, receive, send)
+class MCPEndpoint:
+    """Raw ASGI endpoint — Streamable HTTP. Crée un transport par requête.
+    Mount (pas Route) pour que Starlette passe scope/receive/send directement."""
+    async def __call__(self, scope, receive, send):
+        transport = StreamableHTTPServerTransport(mcp_session_id=None)
+        await transport.handle_request(scope, receive, send)
 
 
 def main():
@@ -42,7 +41,7 @@ def main():
     args = parser.parse_args()
 
     app = Starlette(routes=[
-        Route("/sse/", endpoint=handle_mcp, methods=["GET", "POST"]),
+        Mount("/sse/", app=MCPEndpoint()),
     ])
 
     import uvicorn
