@@ -1,8 +1,8 @@
-"""Composable MCP tool registry."""
+"""Composable MCP tool registry with outputSchema and scopes."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcp.types import Tool, ToolAnnotations
@@ -18,23 +18,30 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any]
     handler: Handler
+    output_schema: dict[str, Any] | None = None
+    required_scopes: tuple[str, ...] = ()
+    risk_level: str = "low"
+    supports_confirmation: bool = False
     read_only: bool = False
     destructive: bool = False
     idempotent: bool = False
     open_world: bool = False
 
     def as_mcp_tool(self) -> Tool:
-        return Tool(
-            name=self.name,
-            description=self.description,
-            inputSchema=self.input_schema,
-            annotations=ToolAnnotations(
+        tool_kwargs: dict[str, Any] = {
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": self.input_schema,
+            "annotations": ToolAnnotations(
                 readOnlyHint=self.read_only,
                 destructiveHint=self.destructive,
                 idempotentHint=self.idempotent,
                 openWorldHint=self.open_world,
             ),
-        )
+        }
+        if self.output_schema is not None:
+            tool_kwargs["outputSchema"] = self.output_schema
+        return Tool(**tool_kwargs)
 
 
 class ToolRegistry:
@@ -63,6 +70,12 @@ class ToolRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(self._tools)
 
+    def tools_by_scope(self, scope: str) -> tuple[str, ...]:
+        return tuple(
+            name for name, spec in self._tools.items()
+            if not spec.required_scopes or scope in spec.required_scopes
+        )
+
 
 def object_schema(
     properties: dict[str, Any] | None = None,
@@ -78,4 +91,3 @@ def object_schema(
     if required:
         schema["required"] = required
     return schema
-

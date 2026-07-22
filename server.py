@@ -1,34 +1,17 @@
-"""Point d'entrée du BOSSCORE MCP PACK — WordPress, fichiers, déploiement cPanel.
-
-Lancé par opencode :
-    python.exe C:\\Users\\Takoudjou\\.config\\opencode\\bosscore-mcp-pack\\server.py
+"""Point d'entrée stdio — BOSSCORE MCP PACK.
+Délègue toute la logique au runtime unifié src/bosscore_mcp/app.py.
 """
-import os
-import sys
 import asyncio
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
-
-from tools.schemas import tool_list
-from tools.handlers import dispatch
-
-server = Server("bosscore")
-
-
-@server.list_tools()
-async def handle_list_tools():
-    return tool_list()
-
-
-@server.call_tool()
-async def handle_call_tool(name, arguments):
-    return await dispatch(name, arguments)
 
 
 async def main():
+    from bosscore_mcp.app import build_server
+    from bosscore_mcp.settings import Settings
+
+    settings = Settings.from_env()
+    server = build_server(settings)
+
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
 
