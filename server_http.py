@@ -42,9 +42,12 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    app = Starlette(routes=[
-        Mount("/sse/", app=MCPEndpoint()),
-    ])
+    app = Starlette(
+        routes=[
+            Mount("/sse/", app=MCPEndpoint()),
+        ],
+        lifespan=lambda app: session_manager.run(),
+    )
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
