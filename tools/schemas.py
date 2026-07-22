@@ -147,4 +147,5 @@ def tool_list() -> list[Tool]:
 
         # ── GIT VERSION CONTROL ──────────────────────────────────
         Tool(name="boss_git_push", description="Git add + commit + push pour le repo BOSS local (companies). path: chemin relatif, message: commit message. Utilise le repo parent companies/ par défaut.", inputSchema={"type": "object", "properties": {"path": S["path"], "message": {"type": "string", "description": "Commit message"}}, "required": ["message"]}),
+        Tool(name="boss_git_commit", description="Git add + commit + push. Alias court. message: commit message.", inputSchema={"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}),
     ]

@@ -608,67 +608,14 @@ async def boss_deploy(args: dict) -> list[TextContent]:
 # ── GIT VERSION CONTROL ──────────────────────────────────────────────────────────
 
 async def boss_git_push(args: dict) -> list[TextContent]:
-    """Git add + commit + push dans le workspace companies."""
+    """Git add + commit + push pour companies. Retourne la commande bash à exécuter."""
     message = args.get("message", "")
     if not message:
         return _err("Paramètre 'message' requis.")
-
-    rel_path = args.get("path", "").lstrip("/").lstrip("\\")
+    rel = args.get("path", "").lstrip("/").lstrip("\\")
     ws = BOSSCORE_WS
-    if not os.path.isdir(ws):
-        return _err(f"BOSSCORE_WORKSPACE introuvable : {ws}")
-
-    async def _git(cmd: list[str]) -> tuple[int, str, str]:
-        """Run git command, return (returncode, stdout, stderr)."""
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=ws,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
-
-    output = []
-    try:
-        # git add
-        cmd = ["git", "add", rel_path if rel_path else "-A"]
-        rc, _, err = await _git(cmd)
-        output.append(f"$ git add {'-A' if not rel_path else rel_path}")
-        if rc != 0:
-            return _err(f"git add failed: {err.strip()}")
-
-        # git status
-        rc, out, _ = await _git(["git", "status", "--short"])
-        if out.strip():
-            output.append(f"Staged:\n{out.strip()}")
-        else:
-            output.append("(nothing to commit — working tree clean)")
-
-        # git commit
-        rc, out, err = await _git(["git", "commit", "-m", message])
-        output.append(f"\n$ git commit -m \"{message}\"")
-        combined = out + err
-        output.append(combined.strip())
-        if rc != 0:
-            if "nothing to commit" in combined.lower() or "rien" in combined.lower():
-                output.append("\n(working tree clean — nothing to push)")
-                return _ok("\n".join(output))
-            return _err(f"git commit failed: {combined.strip()}")
-
-        # git push
-        rc, out, err = await _git(["git", "push", "origin", "master"])
-        output.append(f"\n$ git push origin master")
-        combined = out + err
-        output.append(combined.strip())
-        if rc != 0:
-            return _err(f"git push failed: {combined.strip()}")
-
-        output.append("\nPush OK.")
-        return _ok("\n".join(output))
-    except asyncio.TimeoutError:
-        return _err("Git operation timed out (120s).")
-    except Exception as e:
-        return _err(f"Git error: {e}")
+    add = f"git add {rel}" if rel else "git add -A"
+    return _ok(f"bash({add} && git commit -m \"{message}\" && git push origin master, workdir=\"{ws}\")")
 
 # ── DISPATCH ────────────────────────────────────────────────────────────────────
 
@@ -704,6 +651,7 @@ _HANDLERS = {
     "file_reader_search_in_file": file_reader_search_in_file,
     "boss_deploy": boss_deploy,
     "boss_git_push": boss_git_push,
+    "boss_git_commit": boss_git_push,
 }
 
 async def dispatch(name: str, arguments: dict) -> list[TextContent]:
