@@ -4,7 +4,7 @@ import json, os, sys, logging, base64, mimetypes, tempfile, asyncio, platform, s
 from typing import Any
 
 import httpx
-from mcp.types import TextContent
+from mcp.types import TextContent, CallToolResult
 
 logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
 log = logging.getLogger(__name__)
@@ -679,15 +679,32 @@ _HANDLERS = {
     "boss_git_push": boss_git_push,
 }
 
-async def dispatch(name: str, arguments: dict) -> list[TextContent]:
+async def dispatch(name: str, arguments: dict) -> CallToolResult:
     err = _env_check()
     if err and name.startswith("wp_"):
-        return _err(f"WordPress MCP non configuré : {err}")
+        return _make_result(_err(f"WordPress MCP non configuré : {err}"))
 
     handler = _HANDLERS.get(name)
     if not handler:
-        return _err(f"Unknown tool: {name}")
+        return _make_result(_err(f"Unknown tool: {name}"))
     try:
-        return await handler(arguments if arguments else {})
+        content = await handler(arguments if arguments else {})
+        return _make_result(content)
     except Exception as e:
-        return _err(f"{type(e).__name__}: {e}")
+        return _make_result(_err(f"{type(e).__name__}: {e}"))
+
+
+def _make_result(content: list[TextContent]) -> CallToolResult:
+    """Wrap text content into a CallToolResult. Extract structured content from
+    JSON dict results so outputSchema validation can pass."""
+    structured = None
+    if content:
+        text = content[0].text if hasattr(content[0], 'text') else str(content[0])
+        if text and not text.startswith("Error:"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    structured = parsed
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+    return CallToolResult(content=content, structuredContent=structured)
