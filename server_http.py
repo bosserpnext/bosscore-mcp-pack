@@ -42,7 +42,7 @@ def main():
     args = parser.parse_args()
 
     app = Starlette(routes=[
-        Route("/sse/", endpoint=handle_mcp),
+        Route("/sse/", endpoint=handle_mcp, methods=["GET", "POST"]),
     ])
 
     import uvicorn
