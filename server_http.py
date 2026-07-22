@@ -6,7 +6,7 @@ import sys, argparse
 sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 
 from mcp.server import Server
-from mcp.server.streamable_http import StreamableHTTPServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
@@ -26,12 +26,14 @@ async def handle_call_tool(name, arguments):
     return await dispatch(name, arguments)
 
 
+# Stateless session manager — gère le cycle complet (connect → serve → handle_request)
+session_manager = StreamableHTTPSessionManager(app=server, stateless=True)
+
+
 class MCPEndpoint:
-    """Raw ASGI endpoint — Streamable HTTP. Crée un transport par requête.
-    Mount (pas Route) pour que Starlette passe scope/receive/send directement."""
+    """Raw ASGI endpoint — Streamable HTTP. Délègue au session manager."""
     async def __call__(self, scope, receive, send):
-        transport = StreamableHTTPServerTransport(mcp_session_id=None)
-        await transport.handle_request(scope, receive, send)
+        await session_manager.handle_request(scope, receive, send)
 
 
 def main():
