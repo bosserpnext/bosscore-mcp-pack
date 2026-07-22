@@ -645,7 +645,11 @@ async def boss_git_push(args: dict) -> list[TextContent]:
         output.append(f"\n$ git commit -m \"{message}\"")
         out = r.stderr.strip() if r.stderr else r.stdout.strip()
         output.append(out)
-        if r.returncode != 0 and "nothing to commit" not in (r.stdout + r.stderr):
+        if r.returncode != 0:
+            combined = (r.stdout + r.stderr).lower()
+            if "nothing to commit" in combined or "rien" in combined or "nothing" in combined:
+                output.append("\n(working tree clean — nothing to push)")
+                return _ok("\n".join(output))
             return _err(f"git commit failed: {out}")
 
         # git push
