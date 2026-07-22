@@ -29,8 +29,9 @@ async def handle_call_tool(name, arguments):
 async def handle_mcp(scope, receive, send):
     """ASGI raw handler — Streamable HTTP (POST) + fallback SSE legacy (GET).
     handle_request() gère les deux protocoles : si le POST InitializeRequest
-    arrive, Streamable HTTP ; si GET, fallback SSE avec endpoint event."""
-    transport = StreamableHTTPServerTransport()
+    arrive, Streamable HTTP ; si GET, fallback SSE avec endpoint event.
+    mcp_session_id=None = mode stateless (MCP 2026-07-28)."""
+    transport = StreamableHTTPServerTransport(mcp_session_id=None)
     await transport.handle_request(scope, receive, send)
 
 
