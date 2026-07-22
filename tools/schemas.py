@@ -43,6 +43,7 @@ _SCHEMA = {
     "pattern":     {"type": "string"},
     "repo":        {"type": "string"},
     "key":         {"type": "string"},
+    "text":        {"type": "string"},
     "button":      {"type": "string"},
     "bg_color":    {"type": "string"},
     "text_color":  {"type": "string"},
