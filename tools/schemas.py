@@ -144,4 +144,7 @@ def tool_list() -> list[Tool]:
 
         # ── cPanel DEPLOY ────────────────────────────────────────
         Tool(name="boss_deploy", description="Déploie le code BOSS sur cPanel (git pull + rsync). repo: bosscore, telet, ou all.", inputSchema={"type": "object", "properties": {"repo": S["repo"]}, "required": ["repo"]}),
+
+        # ── GIT VERSION CONTROL ──────────────────────────────────
+        Tool(name="boss_git_push", description="Git add + commit + push pour le repo BOSS local (companies). path: chemin relatif, message: commit message. Utilise le repo parent companies/ par défaut.", inputSchema={"type": "object", "properties": {"path": S["path"], "message": {"type": "string", "description": "Commit message"}}, "required": ["message"]}),
     ]

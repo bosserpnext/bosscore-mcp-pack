@@ -1,6 +1,6 @@
 """Handlers BOSSCORE MCP PACK — WordPress + Fichiers + Déploiement cPanel."""
 
-import json, os, sys, logging, base64, mimetypes, tempfile
+import json, os, sys, logging, base64, mimetypes, tempfile, subprocess
 from typing import Any
 
 import httpx
@@ -14,8 +14,9 @@ log = logging.getLogger(__name__)
 WP_URL  = os.environ.get("WORDPRESS_URL", "").rstrip("/")
 WP_USER = os.environ.get("WORDPRESS_USERNAME", "")
 WP_PASS = os.environ.get("WORDPRESS_APP_PASSWORD", "")
-DEPLOY_TOKEN = os.environ.get("DEPLOY_TOKEN", "")
-DEPLOY_URL   = "https://core.bosserpnext.com/deploy.php"
+DEPLOY_TOKEN  = os.environ.get("DEPLOY_TOKEN", "")
+DEPLOY_URL    = "https://core.bosserpnext.com/deploy.php"
+BOSSCORE_WS   = os.environ.get("BOSSCORE_WORKSPACE", r"H:\Documents\Uncompressed\byContext\ResearchCenter\FetichesDesSciences\pratique\in-infrastructure-management")
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────────
 
@@ -604,6 +605,59 @@ async def boss_deploy(args: dict) -> list[TextContent]:
     except httpx.HTTPError as e:
         return _err(f"Déploiement échoué: {e}")
 
+# ── GIT VERSION CONTROL ──────────────────────────────────────────────────────────
+
+async def boss_git_push(args: dict) -> list[TextContent]:
+    """Git add + commit + push dans le workspace companies.
+    Args: message (commit message), path (optionnel, relatif au workspace).
+    """
+    message = args.get("message", "")
+    if not message:
+        return _err("Paramètre 'message' requis.")
+
+    rel_path = args.get("path", "").lstrip("/").lstrip("\\")
+    ws = BOSSCORE_WS
+    if not os.path.isdir(ws):
+        return _err(f"BOSSCORE_WORKSPACE introuvable : {ws}")
+
+    output = []
+    try:
+        # git add
+        cmd = ["git", "add"]
+        cmd.append(rel_path if rel_path else "-A")
+        r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=30)
+        output.append(f"$ git add {'-A' if not rel_path else rel_path}")
+        if r.returncode != 0:
+            return _err(f"git add échoué: {r.stderr.strip()}")
+
+        # git status (pour info)
+        r = subprocess.run(["git", "status", "--short"], cwd=ws, capture_output=True, text=True, timeout=10)
+        if r.stdout.strip():
+            output.append(f"Staged:\n{r.stdout.strip()}")
+        else:
+            output.append("(nothing to commit)")
+
+        # git commit
+        r = subprocess.run(["git", "commit", "-m", message], cwd=ws, capture_output=True, text=True, timeout=30)
+        output.append(f"\n$ git commit -m \"{message}\"")
+        output.append(r.stderr.strip() if r.stderr else r.stdout.strip())
+        if r.returncode != 0 and "nothing to commit" not in r.stdout:
+            return _err(f"git commit échoué: {r.stderr.strip()}")
+
+        # git push
+        r = subprocess.run(["git", "push", "origin", "master"], cwd=ws, capture_output=True, text=True, timeout=60)
+        output.append(f"\n$ git push origin master")
+        output.append(r.stderr.strip() if r.stderr else r.stdout.strip())
+        if r.returncode != 0:
+            return _err(f"git push échoué: {r.stderr.strip()}")
+
+        output.append("\n✅ Push OK.")
+        return _ok("\n".join(output))
+    except subprocess.TimeoutExpired:
+        return _err("Git operation timed out.")
+    except Exception as e:
+        return _err(f"Git error: {e}")
+
 # ── DISPATCH ────────────────────────────────────────────────────────────────────
 
 _HANDLERS = {
@@ -637,6 +691,7 @@ _HANDLERS = {
     "file_reader_list_directory": file_reader_list_directory, "file_reader_get_file_info": file_reader_get_file_info,
     "file_reader_search_in_file": file_reader_search_in_file,
     "boss_deploy": boss_deploy,
+    "boss_git_push": boss_git_push,
 }
 
 async def dispatch(name: str, arguments: dict) -> list[TextContent]:
