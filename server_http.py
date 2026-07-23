@@ -142,7 +142,11 @@ async def oauth_revoke(request: Request) -> JSONResponse:
 
 
 class OAuthBearerMiddleware:
-    """ASGI middleware: Bearer token validation + Origin check."""
+    """ASGI middleware: Bearer token validation + Origin check + Content-Type fix.
+
+    ChatGPT's MCP client sends application/octet-stream for SSE POST requests,
+    which the MCP transport rejects. We rewrite it to application/json.
+    """
 
     def __init__(self, app):
         self.app = app
@@ -153,6 +157,16 @@ class OAuthBearerMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+
+        # Fix ChatGPT's application/octet-stream Content-Type for MCP requests
+        headers = dict(scope.get("headers", []))
+        content_type = headers.get(b"content-type", b"").decode("latin-1", errors="replace")
+        if scope["path"].startswith("/sse") and "octet-stream" in content_type.lower():
+            # Rewrite headers in scope (list of (key, value) byte pairs)
+            scope["headers"] = [
+                (k, b"application/json" if k == b"content-type" else v)
+                for k, v in scope.get("headers", [])
+            ]
 
         request = Request(scope, receive)
         path = request.url.path
