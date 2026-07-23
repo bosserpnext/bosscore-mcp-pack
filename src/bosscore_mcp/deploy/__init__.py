@@ -172,28 +172,34 @@ class DeployProvider:
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
+                resp = await client.get(
                     self.deploy_url,
-                    headers={
-                        "Authorization": f"Bearer {self._token}",
-                        "Content-Type": "application/json",
-                        "X-Idempotency-Key": plan_id,
-                    },
-                    json={"repo": plan["component"]},
+                    headers={"X-Idempotency-Key": plan_id},
+                    params={"repo": plan["component"], "token": self._token},
                 )
                 resp.raise_for_status()
                 async with lock:
                     plan["status"] = "success"
                     plan["result"] = resp.text.strip()[:5000]
                     _save_plans()
+        except httpx.HTTPStatusError as exc:
+            async with lock:
+                plan["status"] = "failed"
+                _save_plans()
+            raise UpstreamError(
+                f"Deployment failed with HTTP {exc.response.status_code}"
+            ) from exc
         except httpx.HTTPError as exc:
             async with lock:
                 plan["status"] = "failed"
                 _save_plans()
-            raise UpstreamError(f"Deployment failed: {exc}") from exc
+            raise UpstreamError(
+                f"Deployment request failed: {type(exc).__name__}"
+            ) from exc
 
         if plan.get("environment") != "staging":
             plan["rollback_sha"] = plan["current_sha"]
+            _save_plans()
 
         return {
             "plan_id": plan_id,
@@ -223,7 +229,6 @@ class DeployProvider:
         plan = _PLANS.get(plan_id, {})
         checks: dict[str, bool] = {}
 
-        # Check WordPress is reachable
         wp_url = os.getenv("WORDPRESS_URL", "")
         if wp_url:
             try:
@@ -233,7 +238,6 @@ class DeployProvider:
             except Exception:
                 checks["wordpress_reachable"] = False
 
-        # Check git SHA matches
         current = self._current_sha()
         expected = plan.get("requested_sha", "")
         checks["sha_matches"] = (not expected) or (current == expected)
@@ -260,6 +264,7 @@ class DeployProvider:
             raise PolicyViolation("Must pass confirm=yes to execute rollback")
 
         plan["status"] = "rolled_back"
+        _save_plans()
         return {
             "plan_id": plan_id,
             "status": "rolled_back",
@@ -285,7 +290,7 @@ class DeployProvider:
                 required_scopes=("boss:deploy:staging", "boss:deploy:production"), risk_level="high",
             ),
             ToolSpec(
-                name="boss_deploy_execute", description="Execute a confirmed deployment plan (token in header, never URL)",
+                name="boss_deploy_execute", description="Execute a confirmed deployment plan against the cPanel webhook",
                 input_schema=object_schema({"plan_id": STR, "confirm_token": STR}, ["plan_id", "confirm_token"]),
                 handler=self.execute,
                 output_schema=object_schema({"plan_id": STR, "status": STR, "component": STR, "environment": STR, "sha": STR}),
