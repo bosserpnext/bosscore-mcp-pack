@@ -126,7 +126,7 @@ def build_server(settings: Settings) -> Server:
 
     pkg_version = _package_version()
     server = Server(
-        name="BOMOJA ONLINE SECURED SERVICES",
+        name="bosscore-mcp-pack",
         version=pkg_version,
         website_url="https://bomoja.com",
         instructions=(
