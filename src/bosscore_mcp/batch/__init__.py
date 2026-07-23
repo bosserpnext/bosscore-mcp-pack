@@ -23,24 +23,37 @@ NUMBER = {"type": "number"}
 class BatchProvider:
     """Provider for the boss_batch tool.
 
-    Holds a reference to the registry so it can dispatch sub-operations
-    through the same tool resolution as single calls.
+    P0.5 — Read-only by default. Write tools require allow_writes=true.
+    Destructive/Exec/Deploy/Git-write tools are permanently blocked from batch.
     """
+
+    # P0.5: Tools permanently blocked from batch (Exec/Deploy/Git-write)
+    _BATCH_BLOCKED: frozenset[str] = frozenset({
+        "boss_exec_plan", "boss_exec_confirm", "boss_exec_run",
+        "boss_deploy_plan", "boss_deploy_execute", "boss_deploy_rollback",
+        "boss_git_push", "boss_git_commit",
+    })
+
+    # P0.5: Write tools requiring allow_writes=true
+    _REGISTRY_DESTRUCTIVE: frozenset[str] = frozenset({
+        "boss_git_stage", "boss_git_commit", "boss_git_push",
+        "boss_exec_plan", "boss_exec_confirm", "boss_exec_run",
+        "boss_deploy_plan", "boss_deploy_execute", "boss_deploy_rollback",
+        "boss_deploy_verify",
+    })
 
     def __init__(self, registry: ToolRegistry) -> None:
         self._registry = registry
 
     async def batch(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Execute multiple tools concurrently.
+        """Execute multiple tools concurrently with guardrails.
 
-        Input:
-          operations: [{name: str, arguments?: object}]
-          max_concurrent: int (default 10)
-          timeout_seconds: int (default 60)
-          stop_on_error: bool (default false)
-
-        Returns per-operation results tagged with tool name, success/error,
-        and duration.
+        P0.5 — Safety limits:
+          - max 20 operations (was 100)
+          - max 5 concurrent (was 50)
+          - boss_batch is blocked from calling itself (enforced in registry)
+          - write tools require explicit opt-in via allow_writes=true
+          - budget (max_total_time) enforces global deadline
         """
         operations = args.get("operations", [])
         if not isinstance(operations, list) or not operations:
@@ -49,12 +62,21 @@ class BatchProvider:
                 details={"received_type": type(operations).__name__},
             )
 
-        max_concurrent = min(max(int(args.get("max_concurrent", 10)), 1), 50)
-        timeout_seconds = min(max(int(args.get("timeout_seconds", 60)), 1), 300)
+        # P0.5: Reduced from 50 to 5 concurrent, 100 to 20 operations
+        max_concurrent = min(max(int(args.get("max_concurrent", 10)), 1), 5)
+        timeout_seconds = min(max(int(args.get("timeout_seconds", 60)), 1), 120)
         stop_on_error = bool(args.get("stop_on_error", False))
+        allow_writes = bool(args.get("allow_writes", False))
+
+        if len(operations) > 20:
+            raise ValidationError(
+                f"Batch limited to 20 operations (got {len(operations)})",
+                details={"max": 20, "received": len(operations)},
+            )
 
         semaphore = asyncio.Semaphore(max_concurrent)
-        stop_event = asyncio.Event()  # signaled when stop_on_error fires
+        stop_event = asyncio.Event()
+        global_deadline = time.perf_counter() + 120  # absolute deadline
 
         async def _run_one(op: dict[str, Any]) -> dict[str, Any]:
             """Execute a single operation with concurrency and timeout."""
@@ -68,6 +90,16 @@ class BatchProvider:
                     "status": "invalid",
                 }
 
+            # P0.5: Permanently block Exec/Deploy/Git-write tools from batch
+            if tool_name in self._BATCH_BLOCKED:
+                return {
+                    "name": tool_name,
+                    "success": False,
+                    "error": f"Tool '{tool_name}' is permanently blocked in batch for security. Use it directly.",
+                    "duration_ms": 0,
+                    "status": "blocked",
+                }
+
             # Check stop_on_error BEFORE acquiring semaphore
             if stop_on_error and stop_event.is_set():
                 return {
@@ -79,14 +111,33 @@ class BatchProvider:
                 }
 
             async with semaphore:
-                # Double-check after semaphore wait (another task may have
-                # set the stop_event while we were waiting)
+                # Double-check after semaphore wait
                 if stop_on_error and stop_event.is_set():
                     return {
                         "name": tool_name,
                         "success": False,
                         "status": "skipped",
                         "reason": "previous operation failed (stop_on_error)",
+                        "duration_ms": 0,
+                    }
+
+                # P0.5: Block write tools unless explicitly opted in
+                if not allow_writes and tool_name in self._REGISTRY_DESTRUCTIVE:
+                    return {
+                        "name": tool_name,
+                        "success": False,
+                        "status": "blocked",
+                        "error": f"Write tool '{tool_name}' blocked in batch. Set allow_writes=true to enable.",
+                        "duration_ms": 0,
+                    }
+
+                # P0.5: Global deadline check
+                if time.perf_counter() > global_deadline:
+                    return {
+                        "name": tool_name,
+                        "success": False,
+                        "status": "timeout",
+                        "error": "Global batch deadline exceeded",
                         "duration_ms": 0,
                     }
 

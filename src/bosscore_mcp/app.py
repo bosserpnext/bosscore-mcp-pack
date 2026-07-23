@@ -156,24 +156,30 @@ def build_server(settings: Settings) -> Server:
 
     @server.list_tools()
     async def list_tools():
-        return registry.list_tools()
+        # P0.3: filter tools by caller's scopes when context available
+        ctx = get_request_context()
+        return registry.list_tools(context=ctx)
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict | None):
+        # P1.1: propagate request_id for correlation
+        ctx = get_request_context()
+        req_id = ctx.request_id if ctx else ""
+
         t0 = time.perf_counter()
-        log_tool_call("", name)
+        log_tool_call(req_id, name)
         try:
-            result = await registry.call(name, arguments)
+            result = await registry.call(name, arguments, context=ctx)
             elapsed = (time.perf_counter() - t0) * 1000
-            log_tool_result("", name, elapsed, ok=True)
+            log_tool_result(req_id, name, elapsed, ok=True)
             return success(result, duration_ms=elapsed, tool=name)
         except BosscoreMcpError as exc:
             elapsed = (time.perf_counter() - t0) * 1000
-            log_tool_result("", name, elapsed, ok=False)
+            log_tool_result(req_id, name, elapsed, ok=False)
             return failure(exc, tool=name)
         except Exception as exc:
             elapsed = (time.perf_counter() - t0) * 1000
-            log_tool_result("", name, elapsed, ok=False)
+            log_tool_result(req_id, name, elapsed, ok=False)
             return failure(exc, tool=name)
 
     return server

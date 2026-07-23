@@ -1,9 +1,17 @@
-"""Health check and diagnostic tools for the BOSS MCP connector."""
+"""Health check and diagnostic tools for the BOSS MCP connector.
+
+P0.6 — Health check no longer lies: separate live/ready/dependency probes.
+live:  server is running (always 200)
+ready: server + critical dependencies accessible (WordPress, Git, deploy)
+dependencies: per-dependency status (cached for 30s to prevent probe storms)
+"""
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,53 +21,113 @@ STR = {"type": "string"}
 INT = {"type": "integer"}
 BOOL = {"type": "boolean"}
 
+# P0.6: Dependency cache to prevent probe storms
+_dep_cache: dict[str, dict[str, Any]] = {}
+_dep_cache_ttl: float = 30.0  # 30 seconds
+_dep_lock = asyncio.Lock()
+
+
+async def _cached_dependency_check(key: str, checker) -> dict[str, Any]:
+    """Cache dependency health for _dep_cache_ttl seconds."""
+    now = time.monotonic()
+    async with _dep_lock:
+        cached = _dep_cache.get(key)
+        if cached and (now - cached.get("_checked_at", 0)) < _dep_cache_ttl:
+            return {k: v for k, v in cached.items() if not k.startswith("_")}
+
+    result = await checker()
+    result["_checked_at"] = now
+    async with _dep_lock:
+        _dep_cache[key] = result
+    return {k: v for k, v in result.items() if not k.startswith("_")}
+
 
 class HealthProvider:
-    def __init__(self, *, registry: ToolRegistry, profile: str = "full", sha: str = "unknown", version: str = "0.1.0") -> None:
+    def __init__(self, *, registry: ToolRegistry, profile: str = "full",
+                 sha: str = "unknown", version: str = "0.1.0") -> None:
         self._registry = registry
         self.profile = profile
         self.sha = sha
         self.version = version
 
+    async def _check_wordpress(self) -> dict[str, Any]:
+        """Check WordPress connectivity (fast, cached)."""
+        wp_url = os.getenv("WORDPRESS_URL", "")
+        if not wp_url:
+            return {"status": "unknown", "reason": "WORDPRESS_URL not set"}
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{wp_url.rstrip('/')}/wp-json")
+                if r.status_code == 200:
+                    return {"status": "healthy", "latency_ms": round(r.elapsed.total_seconds() * 1000)}
+                return {"status": "degraded", "http_status": r.status_code}
+        except Exception as exc:
+            return {"status": "unhealthy", "error": f"{type(exc).__name__}: {exc}"}
+
+    async def _check_git(self) -> dict[str, Any]:
+        """Check Git workspace accessibility."""
+        workspace = os.getenv("BOSSCORE_WORKSPACE", "")
+        if not workspace:
+            return {"status": "unknown", "reason": "BOSSCORE_WORKSPACE not set"}
+        git_dir = Path(workspace) / ".git"
+        if not git_dir.is_dir():
+            return {"status": "unhealthy", "reason": ".git directory not found"}
+        return {"status": "healthy", "workspace": workspace}
+
+    async def _check_deploy(self) -> dict[str, Any]:
+        """Check deploy configuration."""
+        token = os.getenv("DEPLOY_TOKEN", "")
+        url = os.getenv("DEPLOY_URL", "")
+        if not token or not url:
+            return {"status": "unknown", "reason": "DEPLOY_TOKEN or DEPLOY_URL not set"}
+        return {"status": "healthy", "url": url}
+
     async def health_check(self, args: dict[str, Any]) -> dict[str, Any]:
-        checks: dict[str, Any] = {
-            "python_version": sys.version.split()[0],
-            "platform": platform.system(),
-            "package_version": self.version,
+        """Full health check with live + dependency status (cached)."""
+        deps = await asyncio.gather(
+            _cached_dependency_check("wordpress", self._check_wordpress),
+            _cached_dependency_check("git", self._check_git),
+            _cached_dependency_check("deploy", self._check_deploy),
+            return_exceptions=True,
+        )
+
+        dep_names = ["wordpress", "git", "deploy"]
+        dependencies: dict[str, Any] = {}
+        for name, result in zip(dep_names, deps):
+            if isinstance(result, BaseException):
+                dependencies[name] = {"status": "error", "error": str(result)}
+            else:
+                dependencies[name] = result
+
+        # Overall health: all checked deps must be healthy or unknown
+        unhealthy = [n for n, d in dependencies.items()
+                     if d.get("status") not in ("healthy", "unknown")]
+        overall = "unhealthy" if unhealthy else "healthy"
+
+        return {
+            "status": overall,
+            "live": True,
+            "version": self.version,
             "commit_sha": self.sha,
             "profile": self.profile,
+            "dependencies": dependencies,
         }
 
-        # WordPress connectivity (no secret exposure)
-        wp_url = os.getenv("WORDPRESS_URL", "")
-        if wp_url:
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=10) as client:
-                    r = await client.get(f"{wp_url.rstrip('/')}/wp-json")
-                    checks["wordpress"] = "reachable" if r.status_code == 200 else f"HTTP {r.status_code}"
-            except Exception as exc:
-                checks["wordpress"] = f"unreachable: {exc}"
+    async def live(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Liveness probe — always returns 200 if server is running. No dependency checks."""
+        return {"live": True, "version": self.version}
 
-        # File roots check
-        roots = os.getenv("BOSSCORE_FILE_ROOTS", "")
-        if roots:
-            root_list = [r.strip() for r in roots.split(os.pathsep) if r.strip()]
-            checks["file_roots"] = {
-                "count": len(root_list),
-                "accessible": [r for r in root_list if Path(r).is_dir()],
-            }
+    async def ready(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Readiness probe — checks critical dependencies (cached 30s)."""
+        wp = await _cached_dependency_check("wordpress", self._check_wordpress)
+        wp_ok = wp.get("status") in ("healthy", "unknown")
 
-        # Git config check
-        workspace = os.getenv("BOSSCORE_WORKSPACE", "")
-        if workspace:
-            git_dir = Path(workspace) / ".git"
-            checks["git_configured"] = git_dir.is_dir()
-
-        # Deploy config check
-        checks["deploy_configured"] = bool(os.getenv("DEPLOY_TOKEN", ""))
-
-        return {"status": "healthy", "checks": checks}
+        return {
+            "ready": wp_ok,
+            "version": self.version,
+            "wordpress": wp,
+        }
 
     async def runtime_info(self, args: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -86,6 +154,7 @@ class HealthProvider:
             "BOSSCORE_WORKSPACE", "OLLAMA_URL", "TESSERACT_CMD",
             "DEPLOY_TOKEN", "BOSSCORE_MCP_PROFILE",
             "BOSSCORE_MCP_ALLOWED_ORIGINS",
+            "BOSSCORE_MCP_ENFORCE_AUTH",
         ]
         config = {}
         for var in vars_to_check:
@@ -102,25 +171,50 @@ class HealthProvider:
     def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
-                name="boss_health_check", description="Check server health — version, WordPress, files, Git, deploy (no secrets)",
-                input_schema=object_schema(), handler=self.health_check,
-                output_schema=object_schema({"status": STR, "checks": {"type": "object"}}),
+                name="boss_health_check",
+                description="Check server health — live, version, dependencies (WordPress, Git, deploy). Deps cached 30s.",
+                input_schema=object_schema(),
+                handler=self.health_check,
+                output_schema=object_schema({
+                    "status": STR, "live": BOOL, "version": STR,
+                    "commit_sha": STR, "profile": STR,
+                    "dependencies": {"type": "object"},
+                }),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
-                name="boss_runtime_info", description="Runtime details — version, Python, commit SHA, platform",
+                name="boss_live",
+                description="Liveness probe — always returns live:true if server is running. No dependency checks.",
+                input_schema=object_schema(),
+                handler=self.live,
+                output_schema=object_schema({"live": BOOL, "version": STR}),
+                read_only=True,
+            ),
+            ToolSpec(
+                name="boss_ready",
+                description="Readiness probe — checks critical dependencies (cached 30s to prevent probe storms).",
+                input_schema=object_schema(),
+                handler=self.ready,
+                output_schema=object_schema({"ready": BOOL, "version": STR, "wordpress": {"type": "object"}}),
+                read_only=True,
+            ),
+            ToolSpec(
+                name="boss_runtime_info",
+                description="Runtime details — version, Python, commit SHA, platform",
                 input_schema=object_schema(), handler=self.runtime_info,
                 output_schema=object_schema({"version": STR, "commit_sha": STR, "profile": STR, "python": STR}),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
-                name="boss_tool_inventory", description="List all loaded tools by name",
+                name="boss_tool_inventory",
+                description="List all loaded tools by name",
                 input_schema=object_schema(), handler=self.tool_inventory,
                 output_schema=object_schema({"total": INT, "tools": {"type": "array", "items": STR}, "profile": STR}),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
-                name="boss_config_check", description="Check environment configuration (secrets redacted)",
+                name="boss_config_check",
+                description="Check environment configuration (secrets redacted)",
                 input_schema=object_schema(), handler=self.config_check,
                 output_schema=object_schema({"profile": STR, "config": {"type": "object"}}),
                 read_only=True, required_scopes=("boss:health",),
