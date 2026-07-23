@@ -59,6 +59,22 @@ async def authorization_server_metadata(request: Request) -> JSONResponse:
     })
 
 
+async def openid_configuration(request: Request) -> JSONResponse:
+    """Minimal OIDC discovery — enough to satisfy ChatGPT's discovery chain.
+    Redirects to the OAuth authorization server metadata for actual OAuth 2.1 details.
+    """
+    url = os.getenv("BOSSCORE_MCP_SERVER_URL", "https://vps.bosserpnext.com")
+    return JSONResponse({
+        "issuer": url,
+        "authorization_endpoint": f"{url}/oauth/authorize",
+        "token_endpoint": f"{url}/oauth/token",
+        "scopes_supported": _oauth.scopes,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+    })
+
+
 async def oauth_authorize(request: Request) -> Response:
     """Auto-approve authorization for pre-registered client."""
     from mcp.server.auth.provider import AuthorizationParams
@@ -223,6 +239,8 @@ def main():
             Route("/.well-known/oauth-protected-resource/{path:path}", protected_resource_metadata),
             Route("/.well-known/oauth-authorization-server", authorization_server_metadata),
             Route("/.well-known/oauth-authorization-server/{path:path}", authorization_server_metadata),
+            Route("/.well-known/openid-configuration", openid_configuration),
+            Route("/.well-known/openid-configuration/{path:path}", openid_configuration),
             Route("/oauth/authorize", oauth_authorize),
             Route("/oauth/token", oauth_token, methods=["POST"]),
             Route("/oauth/revoke", oauth_revoke, methods=["POST"]),
