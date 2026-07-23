@@ -113,14 +113,14 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         if code is None:
             return None
         if _now() > code.expires_at:
-            del _CODES[authorization_code]
+            _CODES.pop(authorization_code, None)
             return None
         return code
 
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode,
     ) -> OAuthToken:
-        del _CODES.get(authorization_code.code, None)  # One-time use
+        _CODES.pop(authorization_code.code, None)  # One-time use
 
         access = AccessToken(
             token=uuid.uuid4().hex,
@@ -161,7 +161,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         if rt is None:
             return None
         if rt.expires_at and _now() > rt.expires_at:
-            del _REFRESH_TOKENS[refresh_token]
+            _REFRESH_TOKENS.pop(refresh_token, None)
             return None
         return rt
 
@@ -171,7 +171,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        del _REFRESH_TOKENS.get(refresh_token.token, None)
+        _REFRESH_TOKENS.pop(refresh_token.token, None)
 
         new_scopes = scopes or refresh_token.scopes
         access = AccessToken(
