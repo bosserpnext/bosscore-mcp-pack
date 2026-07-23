@@ -66,12 +66,14 @@ class DeployProvider:
                 raise PolicyViolation("Cannot deploy to production: working tree is dirty")
 
         plan_id = f"deploy-{uuid4().hex[:8]}"
+        confirm_token = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
         plan = {
             "plan_id": plan_id,
             "environment": env,
             "component": component,
             "requested_sha": requested_sha,
             "current_sha": current_sha,
+            "confirm_token": confirm_token,
             "status": "draft",
             "expires_at": str(int(__import__('time').time()) + 300),  # 5 min
         }
@@ -196,7 +198,16 @@ class DeployProvider:
                 name="boss_deploy_plan", description="Create a deployment plan (SHA, env, component, rollback target)",
                 input_schema=object_schema({"repo": STR, "environment": STR, "sha": STR}, ["repo"]),
                 handler=self.plan,
-                output_schema=object_schema({"plan_id": STR, "environment": STR, "component": STR, "status": STR, "current_sha": STR}),
+                output_schema=object_schema({
+                    "plan_id": STR,
+                    "environment": STR,
+                    "component": STR,
+                    "status": STR,
+                    "current_sha": STR,
+                    "requested_sha": STR,
+                    "confirm_token": STR,
+                    "expires_at": STR,
+                }),
                 required_scopes=("boss:deploy:staging", "boss:deploy:production"), risk_level="high",
             ),
             ToolSpec(
