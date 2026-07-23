@@ -230,6 +230,7 @@ def main():
             Route("/oauth/token", oauth_token, methods=["POST"]),
             Route("/oauth/revoke", oauth_revoke, methods=["POST"]),
         ],
+        lifespan=lambda app: session_manager.run(),
     )
 
     wrapped = OAuthBearerMiddleware(app)
