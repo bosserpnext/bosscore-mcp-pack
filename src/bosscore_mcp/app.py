@@ -124,8 +124,19 @@ def build_server(settings: Settings) -> Server:
     """Build and wire the MCP Server with all tools."""
     registry, _cleanups = build_runtime(settings)
 
-    server_name = f"bosscore-{settings.profile}"
-    server = Server(server_name)
+    pkg_version = _package_version()
+    server = Server(
+        name="BOMOJA ONLINE SECURED SERVICES",
+        version=pkg_version,
+        website_url="https://bomoja.com",
+        instructions=(
+            "Plateforme SaaS multi-tenant — portail self-service, catalogue de services, "
+            "équipe, tickets, facturation, notifications, site web public. "
+            "Pipeline de développement full-stack autonome : contenu (WordPress), "
+            "versionnement (Git), déploiement (cPanel), shell sandboxé, monitoring. "
+            "74 capacités. Par BOSS — Bomoja Tech and Industry Optimal Solutions."
+        ),
+    )
 
     @server.list_tools()
     async def list_tools():
