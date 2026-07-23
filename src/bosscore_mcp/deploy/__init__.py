@@ -19,6 +19,62 @@ INT = {"type": "integer"}
 BOOL = {"type": "boolean"}
 
 _PLANS: dict[str, dict[str, Any]] = {}
+_PLANS_LOCK = None  # lazy-init asyncio.Lock
+
+
+def _get_lock():
+    """Lazy-init an asyncio.Lock for thread-safe _PLANS access."""
+    global _PLANS_LOCK
+    if _PLANS_LOCK is None:
+        import asyncio
+        _PLANS_LOCK = asyncio.Lock()
+    return _PLANS_LOCK
+
+
+def _plans_store_path() -> Path:
+    """JSON file for plan persistence (survives restarts)."""
+    store = os.getenv("BOSSCORE_DEPLOY_PLANS_STORE", "/tmp/bosscore-mcp-deploy-plans.json")
+    return Path(store)
+
+
+def _load_plans() -> None:
+    """Load persisted plans from JSON on startup."""
+    path = _plans_store_path()
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        now = int(time.time())
+        for pid, plan in data.items():
+            if int(plan.get("expires_at", 0)) > now:
+                _PLANS[pid] = plan
+    except Exception:
+        pass  # Corrupted file → start fresh
+
+
+def _save_plans() -> None:
+    """Atomically persist plans to JSON."""
+    path = _plans_store_path()
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_PLANS, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass  # Best-effort persistence
+
+
+def _cleanup_expired() -> None:
+    """Remove expired plans from memory and persist."""
+    now = int(time.time())
+    expired = [pid for pid, p in _PLANS.items() if int(p.get("expires_at", 0)) <= now]
+    for pid in expired:
+        del _PLANS[pid]
+    if expired:
+        _save_plans()
+
+
+# Load persisted plans at module import time
+_load_plans()
 
 
 class DeployProvider:
@@ -65,6 +121,7 @@ class DeployProvider:
             if working_tree.stdout.strip():
                 raise PolicyViolation("Cannot deploy to production: working tree is dirty")
 
+        _cleanup_expired()
         plan_id = f"deploy-{uuid4().hex[:8]}"
         confirm_token = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
         plan = {
@@ -75,9 +132,12 @@ class DeployProvider:
             "current_sha": current_sha,
             "confirm_token": confirm_token,
             "status": "draft",
-            "expires_at": str(int(__import__('time').time()) + 300),  # 5 min
+            "expires_at": str(int(time.time()) + 300),  # 5 min
         }
-        _PLANS[plan_id] = plan
+        lock = await _get_lock()
+        async with lock:
+            _PLANS[plan_id] = plan
+            _save_plans()
         return plan
 
     async def execute(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -85,24 +145,29 @@ class DeployProvider:
         if not plan_id or plan_id not in _PLANS:
             raise ValidationError("Invalid or expired plan_id. Call boss_deploy_plan first.")
 
-        plan = _PLANS[plan_id]
-        if plan["status"] != "draft":
-            raise ValidationError(f"Plan already {plan['status']}")
+        lock = await _get_lock()
+        async with lock:
+            plan = _PLANS.get(plan_id)
+            if plan is None:
+                raise ValidationError("Invalid or expired plan_id. Call boss_deploy_plan first.")
+            if plan["status"] != "draft":
+                raise ValidationError(f"Plan already {plan['status']}")
 
-        import time
-        if int(time.time()) > int(plan["expires_at"]):
-            plan["status"] = "expired"
-            raise PolicyViolation("Plan has expired. Create a new plan.")
+            if int(time.time()) > int(plan["expires_at"]):
+                plan["status"] = "expired"
+                _save_plans()
+                raise PolicyViolation("Plan has expired. Create a new plan.")
 
-        confirm_token = args.get("confirm_token", "")
-        expected = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
-        if confirm_token != expected:
-            raise PolicyViolation(
-                "Confirmation token mismatch",
-                details={"expected_format": f"sha256({plan_id}:execute)[:8]", "got": confirm_token},
-            )
+            confirm_token = args.get("confirm_token", "")
+            expected = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
+            if confirm_token != expected:
+                raise PolicyViolation(
+                    "Confirmation token mismatch",
+                    details={"expected_format": f"sha256({plan_id}:execute)[:8]", "got": confirm_token},
+                )
 
-        plan["status"] = "executing"
+            plan["status"] = "executing"
+            _save_plans()
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -116,10 +181,14 @@ class DeployProvider:
                     json={"repo": plan["component"]},
                 )
                 resp.raise_for_status()
-                plan["status"] = "success"
-                plan["result"] = resp.text.strip()[:5000]
+                async with lock:
+                    plan["status"] = "success"
+                    plan["result"] = resp.text.strip()[:5000]
+                    _save_plans()
         except httpx.HTTPError as exc:
-            plan["status"] = "failed"
+            async with lock:
+                plan["status"] = "failed"
+                _save_plans()
             raise UpstreamError(f"Deployment failed: {exc}") from exc
 
         if plan.get("environment") != "staging":
@@ -135,8 +204,12 @@ class DeployProvider:
 
     async def status(self, args: dict[str, Any]) -> dict[str, Any]:
         plan_id = args.get("plan_id", "")
-        if plan_id and plan_id in _PLANS:
-            return _PLANS[plan_id]
+        _cleanup_expired()
+        if plan_id:
+            lock = await _get_lock()
+            async with lock:
+                if plan_id in _PLANS:
+                    return dict(_PLANS[plan_id])
         return {
             "current_sha": self._current_sha(),
             "url": self.deploy_url,
