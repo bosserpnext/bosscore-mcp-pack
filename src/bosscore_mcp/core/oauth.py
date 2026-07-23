@@ -53,8 +53,12 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         self._scopes = [
             s.strip() for s in
             os.getenv("BOSSCORE_MCP_OAUTH_SCOPES",
-                       "boss:health boss:wp:read boss:wp:write boss:files:read "
-                       "boss:git:read boss:git:write boss:deploy:staging").split()
+                       "boss:health "
+                       "boss:wp:read boss:wp:write "
+                       "boss:files:read boss:files:write "
+                       "boss:git:read boss:git:write "
+                       "boss:deploy:staging boss:deploy:execute "
+                       "boss:exec").split()
             if s.strip()
         ]
         self._server_url = os.getenv("BOSSCORE_MCP_SERVER_URL", "https://vps.bosserpnext.com")
