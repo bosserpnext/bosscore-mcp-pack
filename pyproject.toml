@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bosscore-mcp-pack"
-version = "0.2.0"
-description = "Hardened MCP capability pack for BOSSCORE — unified runtime, auth, safe Git, traceable deploy"
+version = "0.3.0"
+description = "Production-hardened MCP capability pack for BOSSCORE — fail-closed auth, scope enforcement, capability profiles, transactional plan store, guarded batch"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
