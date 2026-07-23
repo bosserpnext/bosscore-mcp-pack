@@ -23,7 +23,7 @@ _PLANS: dict[str, dict[str, Any]] = {}
 _PLANS_LOCK = None  # lazy-init asyncio.Lock
 
 
-def _get_lock():
+async def _get_lock():
     """Lazy-init an asyncio.Lock for thread-safe _PLANS access."""
     global _PLANS_LOCK
     if _PLANS_LOCK is None:
