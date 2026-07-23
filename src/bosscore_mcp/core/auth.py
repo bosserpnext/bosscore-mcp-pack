@@ -54,34 +54,41 @@ def _parse_tokens_comma(value: str) -> dict[str, dict[str, Any]]:
     return tokens
 
 
-def validate_token(auth_header: str | None, valid_tokens: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def validate_token(auth_header: str | None, valid_tokens: dict[str, dict[str, Any]], enforce: bool) -> dict[str, Any]:
     if not valid_tokens:
-        return {"actor": "anonymous", "scopes": ()}  # No auth configured → open
+        return {"actor": "anonymous", "scopes": ()}
 
     if not auth_header:
-        raise PolicyViolation("Missing Authorization header", details={"required": True})
+        if enforce:
+            raise PolicyViolation("Missing Authorization header", details={"required": True})
+        return {"actor": "anonymous", "scopes": ()}
 
     scheme, _, token = auth_header.partition(" ")
     if scheme.lower() != "bearer" or not token:
-        raise PolicyViolation("Authorization must be Bearer <token>")
+        if enforce:
+            raise PolicyViolation("Authorization must be Bearer <token>")
+        return {"actor": "anonymous", "scopes": ()}
 
     token_info = valid_tokens.get(token.strip())
     if not token_info:
-        raise PolicyViolation("Invalid token")
+        if enforce:
+            raise PolicyViolation("Invalid token")
+        return {"actor": "anonymous", "scopes": ()}
 
     return token_info
 
 
-def check_scope(required_scopes: tuple[str, ...], granted_scopes: tuple[str, ...]) -> None:
+def check_scope(required_scopes: tuple[str, ...], granted_scopes: tuple[str, ...], enforce: bool) -> None:
     if not required_scopes:
         return
     granted = set(granted_scopes)
     if not all(s in granted for s in required_scopes):
-        missing = [s for s in required_scopes if s not in granted]
-        raise PolicyViolation(
-            "Insufficient scopes",
-            details={"required": list(required_scopes), "granted": list(granted_scopes), "missing": missing},
-        )
+        if enforce:
+            missing = [s for s in required_scopes if s not in granted]
+            raise PolicyViolation(
+                "Insufficient scopes",
+                details={"required": list(required_scopes), "granted": list(granted_scopes), "missing": missing},
+            )
 
 
 # ── Starlette middleware ─────────────────────────────────────────────────────────
@@ -91,6 +98,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.allowed_origins = get_allowed_origins()
         tokens_raw = os.getenv(f"{env_prefix}_TOKENS", "")
         self.valid_tokens = _parse_tokens_comma(tokens_raw)
+        self.enforce = os.getenv(f"{env_prefix}_ENFORCE_AUTH", "").lower() in ("1", "true", "yes")
 
     async def dispatch(self, request: Request, call_next):
         try:
@@ -98,13 +106,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
             validate_origin(origin, self.allowed_origins)
 
             auth = request.headers.get("authorization")
-            token_info = validate_token(auth, self.valid_tokens)
+            token_info = validate_token(auth, self.valid_tokens, self.enforce)
             request.state.mcp_actor = token_info["actor"]
             request.state.mcp_scopes = token_info["scopes"]
+            request.state.mcp_enforce_auth = self.enforce
 
             response = await call_next(request)
         except PolicyViolation as exc:
-            status = 403 if "origin" in str(exc.message).lower() or "scope" in str(exc.message).lower() else 401
+            msg = exc.message.lower()
+            status = 403 if ("origin" in msg or "scope" in msg) else 401
             return JSONResponse(
                 {"error": {"code": exc.code, "message": exc.message, "details": exc.details}},
                 status_code=status,
