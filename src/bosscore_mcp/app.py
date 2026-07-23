@@ -18,6 +18,7 @@ from .deploy import DeployProvider
 from .documents.policy import PathPolicy
 from .documents.provider import DocumentProvider
 from .documents.service import DocumentService
+from .exec import ExecProvider
 from .git import GitProvider
 from .health import HealthProvider
 from .settings import Settings
@@ -110,6 +111,11 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
         version=_package_version(),
     )
     registry.extend(health.specs())
+
+    # ── Exec ─────────────────────────────────────────────────────────────────
+    if workspace and Path(workspace).is_dir():
+        exec_provider = ExecProvider()
+        registry.extend(exec_provider.specs())
 
     return registry, cleanups
 
