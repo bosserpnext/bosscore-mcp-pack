@@ -55,6 +55,17 @@ def _parse_tokens_comma(value: str) -> dict[str, dict[str, Any]]:
 
 
 def validate_token(auth_header: str | None, valid_tokens: dict[str, dict[str, Any]], enforce: bool) -> dict[str, Any]:
+    """Validate Bearer token. Fail-closed: refuse all requests if enforce=True and no tokens configured.
+
+    P0.2 — Previously returned anonymous when valid_tokens was empty, allowing
+    a misconfigured server to accept any request. Now raises PolicyViolation.
+    """
+    if enforce and not valid_tokens:
+        raise PolicyViolation(
+            "Authentication required but no tokens configured. "
+            "Set BOSSCORE_MCP_TOKENS or disable BOSSCORE_MCP_ENFORCE_AUTH."
+        )
+
     if not valid_tokens:
         return {"actor": "anonymous", "scopes": ()}
 
@@ -100,6 +111,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.valid_tokens = _parse_tokens_comma(tokens_raw)
         self.enforce = os.getenv(f"{env_prefix}_ENFORCE_AUTH", "").lower() in ("1", "true", "yes")
 
+        # P0.2: Fail startup if auth is enforced but no tokens configured
+        if self.enforce and not self.valid_tokens:
+            raise RuntimeError(
+                "BOSSCORE_MCP_ENFORCE_AUTH=true but BOSSCORE_MCP_TOKENS is empty. "
+                "Refusing to start with security gap."
+            )
+
     async def dispatch(self, request: Request, call_next):
         try:
             origin = request.headers.get("origin")
@@ -110,6 +128,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.mcp_actor = token_info["actor"]
             request.state.mcp_scopes = token_info["scopes"]
             request.state.mcp_enforce_auth = self.enforce
+
+            # P0.3 / P1.1: Build RequestContext for scope enforcement and correlation
+            from .registry import RequestContext, set_request_context
+
+            import hashlib
+            import time
+            from uuid import uuid4
+
+            request_id = request.headers.get("X-Request-ID", f"req-{uuid4().hex[:12]}")
+            client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            source_ip_hash = (
+                hashlib.sha256(client_ip.encode()).hexdigest()[:12]
+                if client_ip else None
+            )
+
+            ctx = RequestContext(
+                request_id=request_id,
+                actor_id=token_info["actor"],
+                granted_scopes=token_info["scopes"],
+                auth_strength="bearer" if token_info["actor"] != "anonymous" else "none",
+                source_ip_hash=source_ip_hash,
+                user_agent=request.headers.get("user-agent", ""),
+            )
+            set_request_context(ctx)
 
             response = await call_next(request)
         except PolicyViolation as exc:

@@ -1,6 +1,10 @@
 """Unified MCP runtime — single composition for all transports (stdio + HTTP).
 
 Replaces the split-brain: server.py and server_http.py both delegate here.
+
+P0.3 — RequestContext propagated through list_tools/call_tool for scope enforcement.
+P0.4 — Capability profiles: Public (read-only), Workspace (tenant-bound), Operator (full).
+P1.1 — Request ID correlation propagated end-to-end.
 """
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ from mcp.server import Server
 
 from .core.errors import BosscoreMcpError
 from .core.logging import log_tool_call, log_tool_result
-from .core.registry import ToolRegistry
+from .core.registry import ToolRegistry, get_request_context
 from .core.results import failure, success
 from .deploy import DeployProvider
 from .documents.policy import PathPolicy
@@ -51,13 +55,22 @@ def _package_version() -> str:
 def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
     """Build the unified tool registry with all providers.
 
+    P0.4 — Capability profiles determine which tools are registered:
+      - public:     WordPress read-only + health (no Exec, Git write, Deploy)
+      - workspace:  WordPress read/write + documents + health + Git read
+      - operator:   Full (Exec, Git write, Deploy) — private network only
+
     Returns (registry, list of async_close callbacks).
     """
     registry = ToolRegistry()
     cleanups: list = []
 
+    workspace = Path(os.getenv("BOSSCORE_WORKSPACE", ""))
+    has_workspace = bool(workspace and workspace.is_dir())
+    profile = settings.profile  # "public", "workspace", "full" → operator
+
     # ── WordPress ────────────────────────────────────────────────────────────
-    if settings.profile in {"wordpress", "full"}:
+    if settings.profile in {"wordpress", "full", "public", "workspace"}:
         settings.require_wordpress()
         wp_client = WordPressClient(
             settings.wordpress_url,
@@ -68,7 +81,7 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
         registry.extend(WordPressProvider(wp_client).specs())
 
     # ── Documents ────────────────────────────────────────────────────────────
-    if settings.profile in {"files", "full"}:
+    if settings.profile in {"files", "full", "workspace"}:
         settings.require_file_roots()
         policy = PathPolicy(settings.file_roots, settings.max_file_bytes)
         doc_service = DocumentService(
@@ -79,45 +92,44 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
         )
         registry.extend(DocumentProvider(doc_service).specs())
 
-    # ── Git ──────────────────────────────────────────────────────────────────
-    workspace = os.getenv("BOSSCORE_WORKSPACE", "")
-    if workspace and Path(workspace).is_dir():
+    # ── Git (read-only for workspace, full for operator) ─────────────────────
+    if has_workspace and profile in {"full", "workspace"}:
         try:
             git_provider = GitProvider(
-                Path(workspace),
+                workspace,
                 branch=os.getenv("BOSSCORE_GIT_BRANCH", "master"),
                 remote=os.getenv("BOSSCORE_GIT_REMOTE", "origin"),
-                allowlist=(workspace,),
+                allowlist=(str(workspace),),
             )
             registry.extend(git_provider.specs())
         except Exception:
-            pass  # Git not configured → skip gracefully
+            pass
 
-    # ── Deploy ───────────────────────────────────────────────────────────────
+    # ── Deploy (operator only) ───────────────────────────────────────────────
     deploy_token = os.getenv("DEPLOY_TOKEN", "")
     deploy_url = os.getenv("DEPLOY_URL", "https://core.bosserpnext.com/deploy.php")
-    if deploy_token:
+    if deploy_token and (profile == "full" or profile == "operator"):
         deploy_provider = DeployProvider(
             deploy_url, deploy_token,
-            repo_path=Path(workspace) if workspace else None,
+            repo_path=workspace if has_workspace else None,
         )
         registry.extend(deploy_provider.specs())
 
     # ── Health ───────────────────────────────────────────────────────────────
     health = HealthProvider(
         registry=registry,
-        profile=settings.profile,
+        profile=profile,
         sha=_git_sha(),
         version=_package_version(),
     )
     registry.extend(health.specs())
 
-    # ── Exec ─────────────────────────────────────────────────────────────────
-    if workspace and Path(workspace).is_dir():
+    # ── Exec (operator only — P0.4: removed from public/workspace) ───────────
+    if has_workspace and profile == "full":
         exec_provider = ExecProvider()
         registry.extend(exec_provider.specs())
 
-    # ── Batch ────────────────────────────────────────────────────────────────
+    # ── Batch (P0.5: read-only guardrails applied in BatchProvider) ──────────
     from .batch import BatchProvider
     registry.extend(BatchProvider(registry=registry).specs())
 
