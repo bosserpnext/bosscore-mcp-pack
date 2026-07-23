@@ -117,6 +117,10 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
         exec_provider = ExecProvider()
         registry.extend(exec_provider.specs())
 
+    # ── Batch ────────────────────────────────────────────────────────────────
+    from .batch import BatchProvider
+    registry.extend(BatchProvider(registry=registry).specs())
+
     return registry, cleanups
 
 
