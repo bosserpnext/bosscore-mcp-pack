@@ -2,13 +2,16 @@
 
 Serves both as Authorization Server and Resource Server.
 Pre-registers a single client (ChatGPT) — no DCR needed.
-Tokens are opaque UUIDs, stored in memory with expiration.
+Tokens are opaque UUIDs, persisted to JSON file to survive restarts.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 import uuid
+from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from mcp.server.auth.provider import (
@@ -21,25 +24,105 @@ from mcp.server.auth.provider import (
     RefreshToken,
 )
 
-# ── In-memory stores ────────────────────────────────────────────────────────────
+# ── Token store ─────────────────────────────────────────────────────────────────
 _CODES: dict[str, AuthorizationCode] = {}
 _ACCESS_TOKENS: dict[str, AccessToken] = {}
 _REFRESH_TOKENS: dict[str, RefreshToken] = {}
 
-_ACCESS_TOKEN_TTL = int(os.getenv("BOSSCORE_MCP_ACCESS_TOKEN_TTL", "3600"))      # 1 hour
-_REFRESH_TOKEN_TTL = int(os.getenv("BOSSCORE_MCP_REFRESH_TOKEN_TTL", "86400"))   # 24 hours
+_ACCESS_TOKEN_TTL = int(os.getenv("BOSSCORE_MCP_ACCESS_TOKEN_TTL", "86400"))     # 24 hours
+_REFRESH_TOKEN_TTL = int(os.getenv("BOSSCORE_MCP_REFRESH_TOKEN_TTL", "604800"))  # 7 days
 _AUTH_CODE_TTL = int(os.getenv("BOSSCORE_MCP_AUTH_CODE_TTL", "600"))             # 10 min
+
+_STORE_PATH = Path(os.getenv("BOSSCORE_MCP_OAUTH_STORE",
+    "/tmp/bosscore-mcp-oauth-tokens.json"))
+_LOCK = Lock()
 
 
 def _now() -> float:
     return time.time()
 
 
+def _serialize_token(token: Any) -> dict:
+    """Serialize an AccessToken/RefreshToken/AuthorizationCode to a JSON-safe dict."""
+    d = {}
+    for k, v in token.__dict__.items():
+        if isinstance(v, (str, int, float, bool, type(None))):
+            d[k] = v
+        elif isinstance(v, (list, tuple)):
+            d[k] = list(v)
+        else:
+            d[k] = str(v) if v is not None else None
+    return d
+
+
+def _save() -> None:
+    """Persist tokens to JSON file (atomic write)."""
+    now = _now()
+
+    def valid(tokens: dict, expiry_attr: str = "expires_at") -> dict:
+        return {
+            k: _serialize_token(t) for k, t in tokens.items()
+            if not getattr(t, expiry_attr, None) or getattr(t, expiry_attr) > now
+        }
+
+    data = {
+        "access_tokens": valid(_ACCESS_TOKENS),
+        "refresh_tokens": valid(_REFRESH_TOKENS, "expires_at"),
+        "codes": valid(_CODES),
+    }
+    tmp = Path(str(_STORE_PATH) + ".tmp")
+    with _LOCK:
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(_STORE_PATH)
+
+
+def _load() -> None:
+    """Restore tokens from JSON file, skipping expired ones."""
+    if not _STORE_PATH.exists():
+        return
+    try:
+        data = json.loads(_STORE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+
+    now = _now()
+
+    def _reconstruct(cls, raw: dict, identifier_attr: str = "token") -> Any:
+        """Convert a previously‑serialized dict back to an SDK object."""
+        expires = raw.get("expires_at", 0)
+        # Some objects store `expires_at` as int (seconds), some as float
+        if isinstance(expires, (int, float)) and expires <= now:
+            return None  # expired — drop it
+        obj = cls(
+            **{k.replace("resource_server", "resource"): v
+               for k, v in raw.items()
+               if k in cls.__annotations__}
+        )
+        return obj
+
+    for raw in data.get("access_tokens", {}).values():
+        at = _reconstruct(AccessToken, raw)
+        if at:
+            _ACCESS_TOKENS[at.token] = at
+
+    for raw in data.get("refresh_tokens", {}).values():
+        rt = _reconstruct(RefreshToken, raw)
+        if rt:
+            _REFRESH_TOKENS[rt.token] = rt
+
+    for raw in data.get("codes", {}).values():
+        ac = _reconstruct(AuthorizationCode, raw, "code")
+        if ac:
+            _CODES[ac.code] = ac
+
+
+# ── Provider ────────────────────────────────────────────────────────────────────
+
 class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
     """Single-client OAuth provider for BOSS MCP.
 
     Client is pre-registered via environment variables.
-    Tokens are opaque (UUID) and stored in memory.
+    Tokens are opaque (UUID), persisted to JSON file across restarts.
     """
 
     def __init__(self) -> None:
@@ -62,6 +145,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             if s.strip()
         ]
         self._server_url = os.getenv("BOSSCORE_MCP_SERVER_URL", "https://vps.bosserpnext.com")
+        _load()  # Restore tokens from disk
 
     # ── Client management ───────────────────────────────────────────────────
 
@@ -83,17 +167,11 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         )
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        # DCR not supported — raise to signal static registration only
         raise NotImplementedError("Dynamic client registration is disabled")
 
     # ── Authorization flow ──────────────────────────────────────────────────
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
-        """Generate authorization code and return consent redirect URL.
-
-        For our single-client setup, auto-approve without user interaction.
-        The authorization code is embedded in the redirect URI.
-        """
         code = AuthorizationCode(
             code=uuid.uuid4().hex,
             scopes=params.scopes or self._scopes,
@@ -106,8 +184,8 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             subject=client.client_id or "boss-client",
         )
         _CODES[code.code] = code
+        _save()
 
-        # Build redirect URI with authorization code
         import urllib.parse
         redirect = str(params.redirect_uri)
         sep = "&" if "?" in redirect else "?"
@@ -122,13 +200,14 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             return None
         if _now() > code.expires_at:
             _CODES.pop(authorization_code, None)
+            _save()
             return None
         return code
 
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode,
     ) -> OAuthToken:
-        _CODES.pop(authorization_code.code, None)  # One-time use
+        _CODES.pop(authorization_code.code, None)
 
         access = AccessToken(
             token=uuid.uuid4().hex,
@@ -148,6 +227,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             subject=authorization_code.subject,
         )
         _REFRESH_TOKENS[refresh.token] = refresh
+        _save()
 
         return OAuthToken(
             access_token=access.token,
@@ -160,7 +240,12 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
     # ── Token management ────────────────────────────────────────────────────
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        return _ACCESS_TOKENS.get(token)
+        at = _ACCESS_TOKENS.get(token)
+        if at and at.expires_at and _now() > at.expires_at:
+            _ACCESS_TOKENS.pop(token, None)
+            _save()
+            return None
+        return at
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str,
@@ -170,6 +255,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             return None
         if rt.expires_at and _now() > rt.expires_at:
             _REFRESH_TOKENS.pop(refresh_token, None)
+            _save()
             return None
         return rt
 
@@ -200,6 +286,7 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
             subject=refresh_token.subject,
         )
         _REFRESH_TOKENS[new_refresh.token] = new_refresh
+        _save()
 
         return OAuthToken(
             access_token=access.token,
@@ -214,3 +301,4 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
     ) -> None:
         _ACCESS_TOKENS.pop(token.token, None)
         _REFRESH_TOKENS.pop(token.token, None)
+        _save()
