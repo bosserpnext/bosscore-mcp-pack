@@ -19,6 +19,11 @@ STR = {"type": "string"}
 INT = {"type": "integer"}
 BOOL = {"type": "boolean"}
 
+_COMPONENT_PATHS = {
+    "bosscore": "BOSS/core/interface/scripts/wp-content/plugins/bosscore",
+    "telet": "BOSS/core/interface/scripts/wp-content/themes/telet",
+}
+
 _PLANS: dict[str, dict[str, Any]] = {}
 _PLANS_LOCK = None  # lazy-init asyncio.Lock
 
@@ -114,13 +119,22 @@ class DeployProvider:
         current_sha = self._current_sha()
 
         if env == "production":
+            check_path = self.repo_path
+            sub_path = _COMPONENT_PATHS.get(component)
+            if sub_path and self.repo_path:
+                check_path = self.repo_path / sub_path
+                if not check_path.is_dir():
+                    check_path = self.repo_path  # fallback: submodule not initialized
             working_tree = subprocess.run(
                 ["git", "status", "--porcelain"],
-                cwd=str(self.repo_path) if self.repo_path else ".",
+                cwd=str(check_path),
                 capture_output=True, text=True, timeout=10,
             )
             if working_tree.stdout.strip():
-                raise PolicyViolation("Cannot deploy to production: working tree is dirty")
+                raise PolicyViolation(
+                    f"Cannot deploy {component} to production: "
+                    f"working tree is dirty in {check_path.name}"
+                )
 
         _cleanup_expired()
         plan_id = f"deploy-{uuid4().hex[:8]}"
