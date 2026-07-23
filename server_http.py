@@ -228,7 +228,7 @@ def main():
     wrapped = OAuthBearerMiddleware(app)
 
     import uvicorn
-    uvicorn.run(wrapped, host=args.host, port=args.port, log_level=args.log_level.lower())
+    uvicorn.run(wrapped, host=args.host, port=args.port, log_level=args.log_level.lower(), workers=4)
 
 
 if __name__ == "__main__":
