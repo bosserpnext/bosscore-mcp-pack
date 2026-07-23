@@ -217,7 +217,12 @@ def main():
         routes=[
             Mount("/sse/", app=MCPEndpoint(session_manager)),
             Route("/.well-known/oauth-protected-resource", protected_resource_metadata),
+            # P0: ChatGPT tries /.well-known/oauth-protected-resource/sse and
+            #     /.well-known/oauth-protected-resource/mcp/sse for sub-path discovery.
+            #     Catch-all returns the same resource metadata regardless of sub-path.
+            Route("/.well-known/oauth-protected-resource/{path:path}", protected_resource_metadata),
             Route("/.well-known/oauth-authorization-server", authorization_server_metadata),
+            Route("/.well-known/oauth-authorization-server/{path:path}", authorization_server_metadata),
             Route("/oauth/authorize", oauth_authorize),
             Route("/oauth/token", oauth_token, methods=["POST"]),
             Route("/oauth/revoke", oauth_revoke, methods=["POST"]),
