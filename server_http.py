@@ -38,11 +38,7 @@ async def protected_resource_metadata(request: Request) -> JSONResponse:
     return JSONResponse({
         "resource": url,
         "authorization_servers": [url],
-        "scopes_supported": [
-            "boss:health", "boss:wp:read", "boss:wp:write",
-            "boss:files:read", "boss:git:read", "boss:git:write",
-            "boss:deploy:staging",
-        ],
+        "scopes_supported": _oauth.scopes,
         "bearer_methods_supported": ["header"],
         "resource_name": "BOSSCORE MCP Pack",
     })
@@ -59,11 +55,7 @@ async def authorization_server_metadata(request: Request) -> JSONResponse:
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": [
-            "boss:health", "boss:wp:read", "boss:wp:write",
-            "boss:files:read", "boss:git:read", "boss:git:write",
-            "boss:deploy:staging",
-        ],
+        "scopes_supported": _oauth.scopes,
     })
 
 

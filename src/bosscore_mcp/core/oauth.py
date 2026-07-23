@@ -65,6 +65,10 @@ class BossOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
 
     # ── Client management ───────────────────────────────────────────────────
 
+    @property
+    def scopes(self) -> list[str]:
+        return list(self._scopes)
+
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         if client_id != self._client_id:
             return None
