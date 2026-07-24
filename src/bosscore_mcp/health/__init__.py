@@ -20,6 +20,7 @@ from ..core.registry import ToolRegistry, ToolSpec, object_schema
 STR = {"type": "string"}
 INT = {"type": "integer"}
 BOOL = {"type": "boolean"}
+OBJ = {"type": "object"}
 
 # P0.6: Dependency cache to prevent probe storms
 _dep_cache: dict[str, dict[str, Any]] = {}
