@@ -16,13 +16,7 @@ from typing import Any
 from ..core.registry import ToolSpec, object_schema
 from .store import CoordinationStore, get_coordination_store
 
-_OUTPUT_OK = object_schema(
-    properties={
-        "ok": {"type": "boolean"},
-        "data": {"type": "object", "additionalProperties": True},
-    },
-    required=["ok", "data"],
-)
+_OUTPUT_OK: dict = {"type": "object"}  # generic — structuredContent = raw handler output
 
 
 class CoordinationProvider:
