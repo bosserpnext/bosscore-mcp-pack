@@ -175,6 +175,11 @@ class HealthProvider:
                 description="Check server health — live, version, dependencies (WordPress, Git, deploy). Deps cached 30s.",
                 input_schema=object_schema(),
                 handler=self.health_check,
+                output_schema=object_schema({
+                    "status": STR, "live": BOOL, "version": STR,
+                    "commit_sha": STR, "profile": STR,
+                    "dependencies": OBJ,
+                }),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
@@ -182,6 +187,7 @@ class HealthProvider:
                 description="Liveness probe — always returns live:true if server is running. No dependency checks.",
                 input_schema=object_schema(),
                 handler=self.live,
+                output_schema=object_schema({"live": BOOL, "version": STR}),
                 read_only=True,
             ),
             ToolSpec(
@@ -189,24 +195,33 @@ class HealthProvider:
                 description="Readiness probe — checks critical dependencies (cached 30s to prevent probe storms).",
                 input_schema=object_schema(),
                 handler=self.ready,
+                output_schema=object_schema({"ready": BOOL, "version": STR, "wordpress": OBJ}),
                 read_only=True,
             ),
             ToolSpec(
                 name="boss_runtime_info",
                 description="Runtime details — version, Python, commit SHA, platform",
                 input_schema=object_schema(), handler=self.runtime_info,
+                output_schema=object_schema({
+                    "version": STR, "commit_sha": STR, "profile": STR,
+                    "python": STR, "platform": STR, "python_path": STR, "cwd": STR,
+                }),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
                 name="boss_tool_inventory",
                 description="List all loaded tools by name",
                 input_schema=object_schema(), handler=self.tool_inventory,
+                output_schema=object_schema({
+                    "total": INT, "tools": {"type": "array", "items": STR}, "profile": STR,
+                }),
                 read_only=True, required_scopes=("boss:health",),
             ),
             ToolSpec(
                 name="boss_config_check",
                 description="Check environment configuration (secrets redacted)",
                 input_schema=object_schema(), handler=self.config_check,
+                output_schema=object_schema({"profile": STR, "config": OBJ}),
                 read_only=True, required_scopes=("boss:health",),
             ),
         ]

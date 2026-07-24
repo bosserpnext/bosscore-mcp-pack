@@ -8,6 +8,7 @@ from .service import DocumentService
 
 STR = {"type": "string"}
 INT = {"type": "integer", "minimum": 1}
+OBJ = {"type": "object"}
 
 
 class DocumentProvider:
@@ -39,6 +40,7 @@ class DocumentProvider:
                 description=description,
                 input_schema=object_schema(properties, required),
                 handler=handler,
+                output_schema=OBJ,
                 read_only=True,
                 destructive=False,
                 idempotent=True,

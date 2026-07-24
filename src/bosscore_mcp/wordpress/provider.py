@@ -344,7 +344,7 @@ class WordPressProvider:
 
 
 def _spec(name: str, description: str, handler: Handler, properties=None, required=None, *, read=False, destructive=False, idempotent=False, open_world=True) -> ToolSpec:
-    return ToolSpec(name=name, description=description, input_schema=object_schema(properties, required), handler=handler, read_only=read, destructive=destructive, idempotent=idempotent, open_world=open_world)
+    return ToolSpec(name=name, description=description, input_schema=object_schema(properties, required), handler=handler, read_only=read, destructive=destructive, idempotent=idempotent, open_world=open_world, output_schema=OBJ)
 
 
 def _build_specs(p: WordPressProvider) -> list[ToolSpec]:
