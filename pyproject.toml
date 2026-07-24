@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bosscore-mcp-pack"
-version = "0.3.0"
-description = "Production-hardened MCP capability pack for BOSSCORE — fail-closed auth, scope enforcement, capability profiles, transactional plan store, guarded batch"
+version = "0.4.0"
+description = "PACTE-BOSS — multi-agent coordination MCP pack: sessions, claims, conflicts, events, handoffs, workspaces, integration. 100+ tools across WordPress, Git, Deploy, Exec, Health, Documents, Batch, Coordination."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

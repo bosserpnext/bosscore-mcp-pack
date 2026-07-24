@@ -133,6 +133,14 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
     from .batch import BatchProvider
     registry.extend(BatchProvider(registry=registry).specs())
 
+    # ── Coordination (PACTE-BOSS) — workspace+ profiles ────────────────────────
+    if profile in {"full", "workspace"}:
+        try:
+            from .coordination import CoordinationProvider
+            registry.extend(CoordinationProvider().specs())
+        except Exception:
+            pass
+
     return registry, cleanups
 
 
