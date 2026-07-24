@@ -474,7 +474,7 @@ class CoordinationStore:
 
     async def create_request(
         self, request_id: str, from_session: str, need: str, *,
-        target_session: str = "", target_scope: str = "",
+        target_session: str | None = None, target_scope: str = "",
         acceptance: list[str] | None = None, priority: str = "medium",
     ) -> dict[str, Any]:
         await self._ensure_init()
@@ -488,7 +488,7 @@ class CoordinationStore:
                        (request_id, from_session, target_session, target_scope, need,
                         acceptance_json, priority, status, created_at, updated_at)
                        VALUES (?,?,?,?,?,?,?,'open',?,?)""",
-                    (request_id, from_session, target_session, target_scope, need,
+                    (request_id, from_session, target_session or None, target_scope, need,
                      acc_json, priority, now, now),
                 )
                 c.commit()
@@ -614,7 +614,73 @@ class CoordinationStore:
                 return _row_dict(row)
         return await asyncio.to_thread(_do)
 
-    # ── Snapshots ───────────────────────────────────────────────────────────────
+    # ── Enforcement (Levels 3-4) ─────────────────────────────────────────────────
+
+    async def enforce_claim(
+        self, session_id: str, resources: list[str], *, mode: str = "block",
+    ) -> dict[str, Any]:
+        """Check that session has an active claim covering ALL resources.
+        
+        mode='block': returns error dict if no valid claim (Level 4)
+        mode='warn': returns warning but doesn't block (Level 3)
+        """
+        await self._ensure_init()
+        def _do() -> dict:
+            c = self._get_conn()
+            # Find active claims for this session
+            claims = c.execute(
+                "SELECT * FROM claims WHERE session_id=? AND status='active'",
+                (session_id,),
+            ).fetchall()
+            
+            if not claims:
+                msg = f"No active claim for session {session_id}. Create one via boss_work_claim."
+                return {"ok": False, "blocked": mode == "block", "reason": msg, "missing": resources}
+            
+            # Check each resource against all active claims
+            claimed: set[str] = set()
+            for claim in claims:
+                claim_resources = json.loads(claim["resources_json"] or "[]")
+                claimed.update(claim_resources)
+            
+            missing = [r for r in resources if r not in claimed]
+            if not missing:
+                return {"ok": True, "blocked": False, "claim_ids": [cl["claim_id"] for cl in claims]}
+            
+            # Check if ANY other session claims these (conflict warning Level 3)
+            conflicts = c.execute(
+                "SELECT * FROM claims WHERE status='active' AND session_id != ?",
+                (session_id,),
+            ).fetchall()
+            external_conflicts = []
+            for cl in conflicts:
+                cl_res = set(json.loads(cl["resources_json"] or "[]"))
+                overlap = cl_res & set(missing)
+                if overlap:
+                    external_conflicts.append({
+                        "claim_id": cl["claim_id"],
+                        "session_id": cl["session_id"],
+                        "agent_mode": cl["mode"],
+                        "conflicting": list(overlap),
+                    })
+            
+            msg = f"Session {session_id} has no claim on: {missing}"
+            warnings = []
+            if external_conflicts:
+                msg += f". External claims detected: {len(external_conflicts)}"
+                warnings = external_conflicts
+            
+            return {
+                "ok": False,
+                "blocked": mode == "block",
+                "reason": msg,
+                "missing": missing,
+                "warnings": warnings,
+                "hint": "Create a claim via boss_work_claim before writing.",
+            }
+        return await asyncio.to_thread(_do)
+
+    # ── Snapshot ───────────────────────────────────────────────────────────────
 
     async def snapshot(self) -> dict[str, Any]:
         """Full coordination snapshot — sessions, claims, requests, handoffs."""

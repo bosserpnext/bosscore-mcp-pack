@@ -41,6 +41,7 @@ class CoordinationProvider:
             self._boss_work_claim_extend(),
             self._boss_work_claim_release(),
             self._boss_conflict_check(),
+            self._boss_claim_enforce(),  # Level 3-4
             # ── Events ─────────────────────────────────────────────────────
             self._boss_work_event_append(),
             self._boss_work_events_list(),
@@ -58,6 +59,7 @@ class CoordinationProvider:
             self._boss_workspace_create(),
             self._boss_workspace_status(),
             self._boss_workspace_cleanup_plan(),
+            self._boss_workspace_cleanup_execute(),
             # ── Integration ────────────────────────────────────────────────
             self._boss_integration_plan(),
             self._boss_integration_execute(),
@@ -84,7 +86,7 @@ class CoordinationProvider:
                 company=args.get("company", ""),
             )
             await self._store.append_event(session_id, "session.started")
-            return {"ok": True, "data": result}
+            return result
 
         return ToolSpec(
             name="boss_agent_register",
@@ -374,6 +376,33 @@ class CoordinationProvider:
             read_only=True, destructive=False, idempotent=True,
         )
 
+    def _boss_claim_enforce(self) -> ToolSpec:
+        """Level 3-4: enforce active claim before write operations."""
+        async def handler(args: dict) -> dict:
+            result = await self._store.enforce_claim(
+                args["session_id"],
+                args.get("resources", []),
+                mode=args.get("mode", "block"),
+            )
+            return result
+
+        return ToolSpec(
+            name="boss_claim_enforce",
+            description="Vérifier qu'une session a un claim actif sur les ressources spécifiées. Niveau 3 (warn) : avertit. Niveau 4 (block) : refuse l'opération. À appeler AVANT tout Git write, Exec, Deploy ou WordPress write.",
+            input_schema=object_schema(
+                properties={
+                    "session_id": {"type": "string", "description": "ID de la session"},
+                    "resources":  {"type": "array", "items": {"type": "string"}, "description": "Ressources à vérifier"},
+                    "mode":       {"type": "string", "enum": ["warn", "block"], "description": "warn = avertissement, block = refus (défaut)"},
+                },
+                required=["session_id", "resources"],
+            ),
+            output_schema={"type": "object"},
+            handler=handler,
+            required_scopes=("coordination:write",),
+            read_only=False, destructive=False, idempotent=True,
+        )
+
     # ═══════════════════════════════════════════════════════════════════════════
     # Events
     # ═══════════════════════════════════════════════════════════════════════════
@@ -465,11 +494,12 @@ class CoordinationProvider:
     def _boss_work_request_create(self) -> ToolSpec:
         async def handler(args: dict) -> dict:
             req_id = args.get("request_id") or f"REQ-{hashlib.sha256(os.urandom(8)).hexdigest()[:8].upper()}"
+            ts = args.get("target_session", "") or None
             req = await self._store.create_request(
                 request_id=req_id,
                 from_session=args["from_session"],
                 need=args["need"],
-                target_session=args.get("target_session", ""),
+                target_session=ts,
                 target_scope=args.get("target_scope", ""),
                 acceptance=args.get("acceptance", []),
                 priority=args.get("priority", "medium"),
@@ -601,7 +631,7 @@ class CoordinationProvider:
             }
             result = await self._store.create_handoff(handoff_id, session_id, content)
             await self._store.append_event(session_id, "handoff.created", data={"handoff_id": handoff_id})
-            return {"ok": True, "data": result}
+            return result
 
         return ToolSpec(
             name="boss_work_handoff_create",
@@ -783,6 +813,44 @@ class CoordinationProvider:
             handler=handler,
             required_scopes=("coordination:read",),
             read_only=True, destructive=False, idempotent=True,
+        )
+
+    def _boss_workspace_cleanup_execute(self) -> ToolSpec:
+        """Execute cleanup after manual verification (Level 4: requires claim)."""
+        async def handler(args: dict) -> dict:
+            sid = args["session_id"]
+            # Enforce claim before destructive operation
+            enforce = await self._store.enforce_claim(
+                sid, [f"repo:companies"], mode="block",
+            )
+            if not enforce["ok"]:
+                return enforce
+
+            return {
+                "ok": True,
+                "data": {
+                    "session_id": sid,
+                    "commands": [
+                        f"cd /home/bomoja/repos/companies",
+                        f"git worktree remove /home/bomoja/worktrees/{sid} --force 2>/dev/null",
+                        f"git branch -D agent/.../{sid[:20]} 2>/dev/null",
+                        f"echo 'Cleanup complete for {sid}'",
+                    ],
+                    "warning": "Exécutez ces commandes via boss_exec UNIQUEMENT après avoir vérifié l'intégration.",
+                },
+            }
+
+        return ToolSpec(
+            name="boss_workspace_cleanup_execute",
+            description="Générer les commandes de nettoyage d'un worktree (après vérification manuelle). Nécessite un claim actif sur repo:companies.",
+            input_schema=object_schema(
+                properties={"session_id": {"type": "string"}},
+                required=["session_id"],
+            ),
+            output_schema=_OUTPUT_OK,
+            handler=handler,
+            required_scopes=("coordination:write",),
+            read_only=False, destructive=True, idempotent=False,
         )
 
     # ═══════════════════════════════════════════════════════════════════════════
