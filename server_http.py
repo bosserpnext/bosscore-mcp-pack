@@ -13,6 +13,7 @@ import base64
 import hashlib
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -142,10 +143,12 @@ async def oauth_revoke(request: Request) -> JSONResponse:
 
 
 class OAuthBearerMiddleware:
-    """ASGI middleware: Bearer token validation + Origin check + Content-Type fix.
+    """ASGI middleware: OAuth, Origin validation and request context propagation.
 
-    ChatGPT's MCP client sends application/octet-stream for SSE POST requests,
-    which the MCP transport rejects. We rewrite it to application/json.
+    Every MCP request receives an actor-scoped RequestContext. The actor ID is
+    derived from the OAuth authorization subject when available, otherwise from
+    a non-reversible access-token fingerprint. Raw tokens are never logged or
+    persisted in plans.
     """
 
     def __init__(self, app):
@@ -153,25 +156,55 @@ class OAuthBearerMiddleware:
         self.enforce = os.getenv("BOSSCORE_MCP_ENFORCE_AUTH", "").lower() in ("1", "true", "yes")
         self.allowed_origins = get_allowed_origins()
 
+    @staticmethod
+    def _actor_id(access, token_str: str) -> str:
+        subject = str(getattr(access, "subject", "") or "")
+        client_id = str(getattr(access, "client_id", "") or "")
+        generic_subjects = {client_id, "boss-client", "chatgpt-boss"}
+        source = subject if subject and subject not in generic_subjects else token_str
+        prefix = "oauth-subject" if source == subject else "oauth-token"
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+        return f"{prefix}:{digest}"
+
+    @staticmethod
+    def _request_context(request: Request, actor_id: str, scopes, auth_strength: str):
+        from src.bosscore_mcp.core.registry import RequestContext
+
+        request_id = request.headers.get("X-Request-ID", f"req-{uuid.uuid4().hex[:12]}")
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        client_ip = forwarded.split(",")[0].strip()
+        if not client_ip and request.client:
+            client_ip = request.client.host
+        source_ip_hash = (
+            hashlib.sha256(client_ip.encode("utf-8")).hexdigest()[:12]
+            if client_ip else None
+        )
+        return RequestContext(
+            request_id=request_id,
+            actor_id=actor_id,
+            client_id=actor_id,
+            granted_scopes=tuple(scopes),
+            auth_strength=auth_strength,
+            source_ip_hash=source_ip_hash,
+            user_agent=request.headers.get("user-agent", ""),
+        )
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        # Fix ChatGPT's application/octet-stream Content-Type for MCP requests
         headers = dict(scope.get("headers", []))
         content_type = headers.get(b"content-type", b"").decode("latin-1", errors="replace")
         if scope["path"].startswith("/sse") and "octet-stream" in content_type.lower():
-            # Rewrite headers in scope (list of (key, value) byte pairs)
             scope["headers"] = [
-                (k, b"application/json" if k == b"content-type" else v)
-                for k, v in scope.get("headers", [])
+                (key, b"application/json" if key == b"content-type" else value)
+                for key, value in scope.get("headers", [])
             ]
 
         request = Request(scope, receive)
         path = request.url.path
 
-        # Origin check (skip OAuth metadata endpoints)
         if not path.startswith("/.well-known/") and not path.startswith("/oauth/"):
             origin = request.headers.get("origin")
             try:
@@ -184,27 +217,30 @@ class OAuthBearerMiddleware:
                 await resp(scope, receive, send)
                 return
 
-        # OAuth endpoints: pass through
         if path.startswith("/.well-known/") or path.startswith("/oauth/"):
             await self.app(scope, receive, send)
             return
 
-        # MCP endpoint: validate Bearer token
+        actor_id = "anonymous"
+        granted_scopes = ()
+        auth_strength = "none"
+
         if path.startswith("/sse/"):
             auth_header = request.headers.get("authorization", "")
             if auth_header.startswith("Bearer "):
                 token_str = auth_header[7:].strip()
                 access = await _oauth.load_access_token(token_str)
                 if access:
-                    scope["mcp_actor"] = access.client_id
-                    scope["mcp_scopes"] = access.scopes
-                    await self.app(scope, receive, send)
-                    return
+                    actor_id = self._actor_id(access, token_str)
+                    granted_scopes = tuple(access.scopes)
+                    auth_strength = "oauth"
+                    scope["mcp_actor"] = actor_id
+                    scope["mcp_scopes"] = granted_scopes
                 elif self.enforce:
                     resp = JSONResponse(
-                        {"error": "invalid_token"},
-                        status_code=401,
-                        headers={"WWW-Authenticate": "Bearer"},
+                       {"error": "invalid_token"},
+                       status_code=401,
+                       headers={"WWW-Authenticate": "Bearer"},
                     )
                     await resp(scope, receive, send)
                     return
@@ -217,7 +253,14 @@ class OAuthBearerMiddleware:
                 await resp(scope, receive, send)
                 return
 
-        await self.app(scope, receive, send)
+        from src.bosscore_mcp.core.registry import reset_request_context, set_request_context
+
+        context = self._request_context(request, actor_id, granted_scopes, auth_strength)
+        reset_token = set_request_context(context)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reset_request_context(reset_token)
 
 
 class MCPEndpoint:

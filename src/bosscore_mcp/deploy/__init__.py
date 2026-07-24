@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from ..core.errors import PolicyViolation, UpstreamError, ValidationError
-from ..core.plan_store import get_plan_store
+from ..core.plan_store import PlanStore, get_plan_store
 from ..core.registry import ToolSpec, get_request_context, object_schema
 
 STR = {"type": "string"}
@@ -36,12 +36,15 @@ class DeployProvider:
         *,
         environments: tuple[str, ...] = ("staging", "production"),
         repo_path: Path | None = None,
+        plan_store: PlanStore | None = None,
+        plan_ttl: int | None = None,
     ) -> None:
         self.deploy_url = deploy_url.rstrip("/")
         self._token = deploy_token
         self.environments = environments
         self.repo_path = repo_path
-        self._store = get_plan_store()
+        self._store = plan_store or get_plan_store()
+        self._plan_ttl = plan_ttl or int(os.getenv("BOSSCORE_DEPLOY_PLAN_TTL", "1800"))
 
     def _current_sha(self, target_component: str = "") -> str:
         if not self.repo_path:
@@ -61,7 +64,25 @@ class DeployProvider:
     @staticmethod
     def _actor_id() -> str:
         ctx = get_request_context()
-        return ctx.actor_id if ctx else "unknown"
+        return ctx.actor_id if ctx else "stdio"
+
+    @staticmethod
+    def _require_environment_scope(environment: str, action: str) -> None:
+        ctx = get_request_context()
+        if ctx is None:
+            return
+        required = "boss:deploy:execute" if environment == "production" else "boss:deploy:staging"
+        if not ctx.has_scope(required):
+            raise PolicyViolation(
+                f"Missing scope for {action}",
+                details={"environment": environment, "required": required},
+            )
+
+    async def _owned_plan(self, plan_id: str) -> dict[str, Any]:
+        plan = await self._store.get(plan_id, actor=self._actor_id())
+        if plan is None:
+            raise ValidationError("Invalid, expired, or foreign plan_id")
+        return plan
 
     async def plan(self, args: dict[str, Any]) -> dict[str, Any]:
         env = args.get("environment", "staging")
@@ -72,6 +93,7 @@ class DeployProvider:
         if component not in ("bosscore", "telet", "all"):
             raise ValidationError("repo must be bosscore, telet, or all")
 
+        self._require_environment_scope(env, "plan deployment")
         requested_sha = args.get("sha", "")
         current_sha = self._current_sha(component)
 
@@ -102,7 +124,7 @@ class DeployProvider:
         plan = await self._store.create(
             "deploy", plan_data,
             actor=self._actor_id(),
-            ttl=300,
+            ttl=self._plan_ttl,
         )
         plan_id = plan["plan_id"]
         confirm_token = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
@@ -115,7 +137,7 @@ class DeployProvider:
             "current_sha": current_sha,
             "confirm_token": confirm_token,
             "status": "draft",
-            "expires_in_seconds": 300,
+            "expires_in_seconds": self._plan_ttl,
         }
 
     async def execute(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +147,17 @@ class DeployProvider:
         if not plan_id:
             raise ValidationError("plan_id is required")
 
+        expected = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
+        if confirm_token != expected:
+            raise PolicyViolation("Confirmation token mismatch")
+
+        owned = await self._owned_plan(plan_id)
+        plan_data = owned["data"]
+        self._require_environment_scope(
+            plan_data.get("environment", "staging"),
+            "execute deployment",
+        )
+
         try:
             plan = await self._store.consume(plan_id, actor=self._actor_id())
         except KeyError:
@@ -133,13 +166,6 @@ class DeployProvider:
             raise PolicyViolation("Plan does not belong to current actor")
         except ValueError as exc:
             raise ValidationError(str(exc))
-
-        expected = sha256(f"{plan_id}:execute".encode()).hexdigest()[:8]
-        if confirm_token != expected:
-            raise PolicyViolation(
-                "Confirmation token mismatch",
-                details={"expected": expected, "got": confirm_token},
-            )
 
         plan_data = plan["data"]
         await self._store.update_status(plan_id, "executing")
@@ -171,14 +197,15 @@ class DeployProvider:
     async def status(self, args: dict[str, Any]) -> dict[str, Any]:
         plan_id = args.get("plan_id", "")
         if plan_id:
-            plan = await self._store.get(plan_id)
-            if plan:
-                return {
-                    "plan_id": plan_id,
-                    "status": plan["status"],
-                    "component": plan["data"].get("component", "unknown"),
-                    "current_sha": self._current_sha(plan["data"].get("component", "")),
-                }
+            plan = await self._owned_plan(plan_id)
+            return {
+                "plan_id": plan_id,
+                "status": plan["status"],
+                "component": plan["data"].get("component", "unknown"),
+                "environment": plan["data"].get("environment", "unknown"),
+                "requested_sha": plan["data"].get("requested_sha", ""),
+                "current_sha": self._current_sha(plan["data"].get("component", "")),
+            }
         return {
             "current_sha": self._current_sha(),
             "url": self.deploy_url,
@@ -187,23 +214,33 @@ class DeployProvider:
 
     async def verify(self, args: dict[str, Any]) -> dict[str, Any]:
         plan_id = args.get("plan_id", "")
-        checks: dict[str, bool] = {}
+        plan = await self._owned_plan(plan_id) if plan_id else None
+        component = plan["data"].get("component", "") if plan else ""
+        expected_sha = ""
+        if plan:
+            expected_sha = plan["data"].get("requested_sha") or plan["data"].get("current_sha", "")
 
+        checks: dict[str, bool] = {}
         wp_url = os.getenv("WORDPRESS_URL", "")
         if wp_url:
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
-                    r = await client.get(f"{wp_url.rstrip('/')}/wp-json")
-                    checks["wordpress_reachable"] = r.status_code == 200
+                    response = await client.get(f"{wp_url.rstrip('/')}/wp-json")
+                    checks["wordpress_reachable"] = response.status_code == 200
             except Exception:
                 checks["wordpress_reachable"] = False
+        else:
+            checks["wordpress_reachable"] = False
 
-        current = self._current_sha()
-        checks["local_sha"] = current
-        checks["deploy_url"] = bool(self.deploy_url)
+        current = self._current_sha(component)
+        checks["deploy_url_configured"] = bool(self.deploy_url)
+        checks["local_target_matches"] = not expected_sha or current == expected_sha[:8]
 
         return {
             "plan_id": plan_id,
+            "component": component,
+            "expected_sha": expected_sha,
+            "local_sha": current,
             "checks": checks,
             "all_passed": all(checks.values()),
         }
@@ -217,13 +254,11 @@ class DeployProvider:
         if confirm.lower() != "yes":
             raise PolicyViolation("Must pass confirm=yes to execute rollback")
 
-        try:
-            plan = await self._store.get(plan_id, actor=self._actor_id())
-        except Exception:
-            raise ValidationError("No deployment found for rollback")
-
-        if plan is None:
-            raise ValidationError("No deployment found for rollback")
+        plan = await self._owned_plan(plan_id)
+        self._require_environment_scope(
+            plan["data"].get("environment", "production"),
+            "rollback deployment",
+        )
 
         rollback_sha = plan["data"].get("current_sha", "")
         if not rollback_sha:
@@ -262,7 +297,7 @@ class DeployProvider:
                     "status": STR, "current_sha": STR, "requested_sha": STR,
                     "confirm_token": STR, "expires_in_seconds": INT,
                 }),
-                required_scopes=("boss:deploy:staging", "boss:deploy:production"), risk_level="high",
+                required_scopes=("boss:deploy:staging",), risk_level="high",
             ),
             ToolSpec(
                 name="boss_deploy_execute",
@@ -270,7 +305,7 @@ class DeployProvider:
                 input_schema=object_schema({"plan_id": STR, "confirm_token": STR}, ["plan_id", "confirm_token"]),
                 handler=self.execute,
                 output_schema=object_schema({"plan_id": STR, "status": STR, "component": STR, "environment": STR, "sha": STR}),
-                required_scopes=("boss:deploy:staging", "boss:deploy:production"),
+                required_scopes=("boss:deploy:staging",),
                 risk_level="critical", destructive=True, supports_confirmation=True,
             ),
             ToolSpec(
@@ -278,7 +313,12 @@ class DeployProvider:
                 description="Check deployment status and current SHA",
                 input_schema=object_schema({"plan_id": STR}),
                 handler=self.status,
-                output_schema=object_schema({"current_sha": STR, "url": STR, "environments": {"type": "array", "items": STR}}),
+                output_schema=object_schema({
+                    "plan_id": STR, "status": STR, "component": STR,
+                    "environment": STR, "requested_sha": STR,
+                    "current_sha": STR, "url": STR,
+                    "environments": {"type": "array", "items": STR},
+                }),
                 read_only=True, required_scopes=("boss:deploy:staging",),
             ),
             ToolSpec(
@@ -286,7 +326,11 @@ class DeployProvider:
                 description="Verify deployment — smoke test WordPress + SHA match",
                 input_schema=object_schema({"plan_id": STR}),
                 handler=self.verify,
-                output_schema=object_schema({"checks": {"type": "object"}, "all_passed": BOOL}),
+                output_schema=object_schema({
+                    "plan_id": STR, "component": STR, "expected_sha": STR,
+                    "local_sha": STR, "checks": {"type": "object"},
+                    "all_passed": BOOL,
+                }),
                 read_only=True, required_scopes=("boss:deploy:staging",),
             ),
             ToolSpec(
@@ -295,7 +339,7 @@ class DeployProvider:
                 input_schema=object_schema({"plan_id": STR, "confirm": STR}, ["plan_id", "confirm"]),
                 handler=self.rollback,
                 output_schema=object_schema({"plan_id": STR, "status": STR, "restored_sha": STR}),
-                required_scopes=("boss:deploy:production",), risk_level="critical", destructive=True,
+                required_scopes=("boss:deploy:staging",), risk_level="critical", destructive=True,
                 supports_confirmation=True,
             ),
         ]

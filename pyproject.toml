@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bosscore-mcp-pack"
-version = "0.4.0"
+version = "0.4.1"
 description = "PACTE-BOSS — multi-agent coordination MCP pack: sessions, claims, conflicts, events, handoffs, workspaces, integration. 100+ tools across WordPress, Git, Deploy, Exec, Health, Documents, Batch, Coordination."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "httpx>=0.28,<1",
   "mcp>=1.28,<2",

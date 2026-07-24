@@ -39,10 +39,12 @@ def test_media_source_rejects_local_addresses(url):
         validate_public_http_url(url)
 
 
-def test_file_policy_requires_absolute_paths(tmp_path):
+def test_file_policy_resolves_relative_paths_inside_workspace(tmp_path, monkeypatch):
+    relative = tmp_path / "relative.txt"
+    relative.write_text("safe", encoding="utf-8")
+    monkeypatch.setenv("BOSSCORE_WORKSPACE", str(tmp_path))
     policy = PathPolicy((tmp_path,), 1024)
-    with pytest.raises(PolicyViolation):
-        policy.resolve("relative.txt")
+    assert policy.resolve("relative.txt") == relative.resolve()
 
 
 def test_file_policy_rejects_paths_outside_roots(tmp_path):

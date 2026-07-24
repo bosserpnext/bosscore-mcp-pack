@@ -23,13 +23,18 @@ _current_request_context: contextvars.ContextVar[RequestContext | None] = (
 )
 
 
-def set_request_context(ctx: RequestContext | None) -> None:
-    """Set the current request context for scope enforcement and correlation.
+def set_request_context(ctx):
+    """Set the current request context and return a reset token.
 
-    Must be called at the start of each HTTP request (via middleware).
-    Stdio mode leaves it unset (None = backward compatible, no enforcement).
+    HTTP middleware must reset the token in a finally block so one request
+    cannot leak its actor or scopes into another request.
     """
-    _current_request_context.set(ctx)
+    return _current_request_context.set(ctx)
+
+
+def reset_request_context(token) -> None:
+    """Restore the previous request context."""
+    _current_request_context.reset(token)
 
 
 def get_request_context() -> RequestContext | None:

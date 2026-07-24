@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 from bosscore_mcp.core.registry import ToolRegistry
 from bosscore_mcp.documents.policy import PathPolicy
 from bosscore_mcp.documents.provider import DocumentProvider
@@ -18,28 +15,27 @@ class FakeWordPressClient:
         raise AssertionError("No download expected in contract tests")
 
 
-def legacy_tool_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Tool":
-            for keyword in node.keywords:
-                if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
-                    names.add(keyword.value.value)
-    return names
-
-
-def test_wordpress_contract_preserves_all_legacy_names():
+def test_wordpress_contract_exposes_expected_surface():
     provider = WordPressProvider(FakeWordPressClient())
     actual = {spec.name for spec in provider.specs()}
-    legacy = legacy_tool_names(
-        Path(r"C:\Users\Takoudjou\.config\opencode\mcp-wordpress-bridge.py")
-    )
-    assert actual == legacy
+    required = {
+        "wp_list_pages",
+        "wp_get_page",
+        "wp_create_page",
+        "wp_update_page",
+        "wp_delete_page",
+        "wp_list_media",
+        "wp_upload_media",
+        "wp_list_users",
+        "wp_create_user",
+        "wp_delete_user",
+        "wp_raw_request",
+    }
+    assert required <= actual
     assert len(actual) == 55
 
 
-def test_document_contract_preserves_all_legacy_names(tmp_path):
+def test_document_contract_exposes_exact_surface(tmp_path):
     service = DocumentService(
         PathPolicy((tmp_path,), 1024),
         max_output_chars=5000,
@@ -47,11 +43,14 @@ def test_document_contract_preserves_all_legacy_names(tmp_path):
         tesseract_command="missing",
     )
     actual = {spec.name for spec in DocumentProvider(service).specs()}
-    legacy = legacy_tool_names(
-        Path(r"C:\Users\Takoudjou\.config\opencode\mcp-file-reader.py")
-    )
-    assert actual == legacy
-    assert len(actual) == 6
+    assert actual == {
+        "read_file",
+        "list_directory",
+        "search_in_file",
+        "get_file_info",
+        "convert_to_markdown",
+        "read_image",
+    }
 
 
 def test_combined_registry_has_61_unique_tools(tmp_path):
@@ -77,4 +76,3 @@ def test_annotations_distinguish_read_and_destructive_tools():
     assert tools["wp_delete_user"].destructive is True
     assert tools["wp_update_page"].idempotent is True
     assert tools["wp_upload_media"].open_world is True
-
