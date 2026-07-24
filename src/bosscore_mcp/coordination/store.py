@@ -391,13 +391,16 @@ class CoordinationStore:
         def _do() -> dict:
             with self._lock:
                 c = self._get_conn()
-                c.execute(
+                cur = c.execute(
                     """INSERT INTO events (session_id, at, type, repo, path, sha, command, summary, data_json)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?)
+                       RETURNING id""",
                     (session_id, now, event_type, repo, path, sha, command, summary, data_json),
                 )
+                row = cur.fetchone()
+                last_id = row[0]
                 c.commit()
-                row = c.execute("SELECT * FROM events WHERE id = ?", (c.lastrowid,)).fetchone()
+                row = c.execute("SELECT * FROM events WHERE id = ?", (last_id,)).fetchone()
                 return _row_dict(row)
         return await asyncio.to_thread(_do)
 
