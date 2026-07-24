@@ -922,5 +922,5 @@ def _new_session_id(args: dict) -> str:
 
 
 def _new_claim_id(session_id: str) -> str:
-    short = hashlib.sha256(session_id.encode()).hexdigest()[:8]
+    short = hashlib.sha256((session_id + os.urandom(8).hex()).encode()).hexdigest()[:8]
     return f"CLAIM-{short}"
