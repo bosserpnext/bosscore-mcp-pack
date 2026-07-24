@@ -69,6 +69,10 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
     has_workspace = bool(workspace and workspace.is_dir())
     profile = settings.profile  # "public", "workspace", "full" → operator
 
+    # Shared references for dynamic worktree path registration (PACTE-BOSS)
+    policy = None          # type: PathPolicy | None
+    exec_provider = None   # type: ExecProvider | None
+
     # ── WordPress ────────────────────────────────────────────────────────────
     if settings.profile in {"wordpress", "full", "public", "workspace"}:
         settings.require_wordpress()
@@ -137,7 +141,10 @@ def build_runtime(settings: Settings) -> tuple[ToolRegistry, list]:
     if profile in {"full", "workspace"}:
         try:
             from .coordination import CoordinationProvider
-            registry.extend(CoordinationProvider().specs())
+            registry.extend(CoordinationProvider(
+                policy=policy,
+                exec_provider=exec_provider,
+            ).specs())
         except Exception:
             pass
 

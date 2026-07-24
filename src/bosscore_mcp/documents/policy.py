@@ -1,6 +1,13 @@
-"""Filesystem authorization policy for document tools."""
+"""Filesystem authorization policy for document tools.
+
+Roots are dynamic: static roots from BOSSCORE_FILE_ROOTS + dynamically added
+worktree paths registered via add_root() at runtime (PACTE-BOSS worktree isolation).
+
+Relative paths are resolved against the first registered root (canonical workspace).
+"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..core.errors import PolicyViolation, ValidationError
@@ -10,8 +17,17 @@ class PathPolicy:
     def __init__(self, roots: tuple[Path, ...], max_file_bytes: int) -> None:
         if not roots:
             raise ValidationError("At least one authorized file root is required")
-        self.roots = tuple(root.resolve() for root in roots)
+        self.roots: list[Path] = [root.resolve() for root in roots]
         self.max_file_bytes = max_file_bytes
+
+    def add_root(self, path: str | Path) -> Path:
+        """Dynamically add an authorized root (e.g. worktree path after workspace_create).
+        Returns the resolved path. Idempotent — does not duplicate.
+        """
+        resolved = Path(path).expanduser().resolve()
+        if resolved not in self.roots:
+            self.roots.append(resolved)
+        return resolved
 
     @staticmethod
     def _has_forbidden_segment(path: Path) -> bool:
@@ -37,8 +53,18 @@ class PathPolicy:
 
     def resolve(self, raw_path: str, *, expect: str = "file") -> Path:
         candidate = Path(raw_path).expanduser()
+
+        # ── Relative path — resolve against canonical workspace ──────────
         if not candidate.is_absolute():
-            raise PolicyViolation("Only absolute paths are accepted")
+            workspace = os.getenv("BOSSCORE_WORKSPACE", "")
+            if workspace:
+                candidate = Path(workspace) / candidate
+            else:
+                raise PolicyViolation(
+                    "Relative path requires BOSSCORE_WORKSPACE to be set",
+                    details={"path": raw_path},
+                )
+
         try:
             resolved = candidate.resolve(strict=True)
         except FileNotFoundError as exc:

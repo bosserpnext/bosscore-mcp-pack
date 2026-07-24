@@ -13,17 +13,36 @@ import time
 import uuid
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from ..core.registry import ToolSpec, object_schema
 from .store import CoordinationStore, get_coordination_store
+
+if TYPE_CHECKING:
+    from ..documents.policy import PathPolicy
+    from ..exec import ExecProvider
 
 _OUTPUT_OK: dict = {"type": "object"}  # generic — structuredContent = raw handler output
 
 
 class CoordinationProvider:
-    """Produces ToolSpec instances for PACTE-BOSS coordination."""
+    """Produces ToolSpec instances for PACTE-BOSS coordination.
 
-    def __init__(self, store: CoordinationStore | None = None) -> None:
+    Accepts optional references to PathPolicy and ExecProvider so that
+    worktree paths created via workspace_create are automatically registered
+    for file access and command execution.
+    """
+
+    def __init__(
+        self,
+        store: CoordinationStore | None = None,
+        *,
+        policy: PathPolicy | None = None,
+        exec_provider: ExecProvider | None = None,
+    ) -> None:
         self._store = store or get_coordination_store()
+        self._policy = policy
+        self._exec_provider = exec_provider
 
     def specs(self) -> list[ToolSpec]:
         return [
@@ -715,6 +734,22 @@ class CoordinationProvider:
             base_path = args.get("base_path", "/home/bomoja/worktrees")
             worktree_path = f"{base_path}/{session_id}"
 
+            # ── Register worktree path for file access + exec ─────────
+            # Best-effort: failure here must not block workspace creation.
+            registered = []
+            if self._policy is not None:
+                try:
+                    self._policy.add_root(worktree_path)
+                    registered.append("documents")
+                except Exception:
+                    pass
+            if self._exec_provider is not None:
+                try:
+                    self._exec_provider.add_allowed_path(worktree_path)
+                    registered.append("exec")
+                except Exception:
+                    pass
+
             # Generate the git worktree commands
             commands = [
                 f"# Create worktree for session {session_id}",
@@ -731,6 +766,7 @@ class CoordinationProvider:
                     "branch": branch,
                     "worktree_path": worktree_path,
                     "commands": "\n".join(commands),
+                    "registered_for": registered,
                     "note": "Execute these commands via boss_exec on VPS or manually on local machine.",
                 },
             }

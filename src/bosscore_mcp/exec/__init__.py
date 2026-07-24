@@ -50,12 +50,25 @@ _PLANS: dict[str, dict[str, Any]] = {}
 
 
 class ExecProvider:
-    """Sandboxed command executor with plan/confirm/execute."""
+    """Sandboxed command executor with plan/confirm/execute.
+
+    allowed_paths is dynamic: starts from ALLOWED_PATHS (env-configured),
+    then grows via add_allowed_path() when worktrees are created.
+    """
 
     def __init__(self) -> None:
         self.allowed_cmds = ALLOWED_COMMANDS
-        self.allowed_paths = ALLOWED_PATHS
+        self.allowed_paths: list[Path] = list(ALLOWED_PATHS)
         self.workspace = Path(os.getenv("BOSSCORE_WORKSPACE", "/home/bomoja/repos/companies"))
+
+    def add_allowed_path(self, path: str | Path) -> Path:
+        """Dynamically authorize a directory for exec (e.g. worktree after workspace_create).
+        Returns the resolved path. Idempotent — does not duplicate.
+        """
+        resolved = Path(path).expanduser().resolve()
+        if resolved not in self.allowed_paths:
+            self.allowed_paths.append(resolved)
+        return resolved
 
     def _validate_command(self, command: str) -> list[str]:
         """Parse and validate a command string. Returns argv list."""
