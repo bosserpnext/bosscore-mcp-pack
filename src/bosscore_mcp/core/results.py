@@ -24,9 +24,11 @@ def success(data: Any, *, request_id: str | None = None, duration_ms: int | floa
     meta = {"request_id": req_id, "ok": True, "tool": tool, "duration_ms": round(duration_ms, 2)}
     payload = {"ok": True, "data": data, "meta": meta}
     text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    # structuredContent must match outputSchema — meta lives only in text + CallToolResult.meta
+    structured = {"ok": True, "data": data}
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structuredContent=payload,
+        structuredContent=structured,
         isError=False,
         meta={"request_id": req_id, "tool": tool},
     )
@@ -50,9 +52,10 @@ def failure(error: Exception, *, request_id: str | None = None, tool: str = "") 
     meta = {"request_id": req_id, "ok": False, "tool": tool}
     payload = {"ok": False, "error": err_payload, "meta": meta}
     text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    structured = {"ok": False, "error": err_payload}
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structuredContent=payload,
+        structuredContent=structured,
         isError=True,
         meta={"request_id": req_id, "tool": tool},
     )
