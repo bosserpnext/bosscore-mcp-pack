@@ -44,6 +44,20 @@ class CoordinationProvider:
         self._policy = policy
         self._exec_provider = exec_provider
 
+    def _deregister_worktree(self, session_id: str) -> None:
+        """Remove worktree path from policy and exec provider (best-effort)."""
+        worktree_path = f"/home/bomoja/worktrees/{session_id}"
+        if self._policy is not None:
+            try:
+                self._policy.remove_root(worktree_path, session_id=session_id)
+            except Exception:
+                pass
+        if self._exec_provider is not None:
+            try:
+                self._exec_provider.remove_allowed_path(worktree_path)
+            except Exception:
+                pass
+
     def specs(self) -> list[ToolSpec]:
         return [
             # ── Sessions ──────────────────────────────────────────────────
@@ -196,6 +210,7 @@ class CoordinationProvider:
         async def handler(args: dict) -> dict:
             session = await self._store.close_session(args["session_id"])
             await self._store.append_event(args["session_id"], "session.closed")
+            self._deregister_worktree(args["session_id"])
             return {"ok": True, "data": session}
 
         return ToolSpec(
@@ -354,7 +369,10 @@ class CoordinationProvider:
     def _boss_work_claim_release(self) -> ToolSpec:
         async def handler(args: dict) -> dict:
             claim = await self._store.release_claim(args["claim_id"])
-            await self._store.append_event(claim.get("session_id", ""), "claim.released", data={"claim_id": args["claim_id"]})
+            sid = claim.get("session_id", "")
+            await self._store.append_event(sid, "claim.released", data={"claim_id": args["claim_id"]})
+            if sid:
+                self._deregister_worktree(sid)
             return {"ok": True, "data": claim}
 
         return ToolSpec(
@@ -739,7 +757,7 @@ class CoordinationProvider:
             registered = []
             if self._policy is not None:
                 try:
-                    self._policy.add_root(worktree_path)
+                    self._policy.add_root(worktree_path, session_id=session_id)
                     registered.append("documents")
                 except Exception:
                     pass

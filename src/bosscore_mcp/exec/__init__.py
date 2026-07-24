@@ -70,6 +70,17 @@ class ExecProvider:
             self.allowed_paths.append(resolved)
         return resolved
 
+    def remove_allowed_path(self, path: str | Path) -> bool:
+        """Remove a dynamically added allowed path (e.g. after worktree cleanup).
+        Returns True if removed, False if not found.
+        """
+        resolved = Path(path).expanduser().resolve()
+        try:
+            self.allowed_paths.remove(resolved)
+            return True
+        except ValueError:
+            return False
+
     def _validate_command(self, command: str) -> list[str]:
         """Parse and validate a command string. Returns argv list."""
         cmd = command.strip()
@@ -106,11 +117,15 @@ class ExecProvider:
         return argv
 
     def _resolve_cwd(self, cwd: str) -> Path:
-        """Resolve working directory, ensuring it's within allowed paths."""
+        """Resolve working directory, ensuring it's within allowed paths.
+
+        Uses is_relative_to() (not startswith) to prevent prefix-collision
+        between worktrees with overlapping session IDs (e.g. session-A vs session-AB).
+        """
         if not cwd:
             return self.workspace
         resolved = Path(cwd).expanduser().resolve()
-        if not any(str(resolved).startswith(str(p)) for p in self.allowed_paths):
+        if not any(resolved.is_relative_to(p) for p in self.allowed_paths):
             raise PolicyViolation(
                 f"Working directory outside allowed paths: {cwd}",
                 details={"cwd": str(resolved), "allowed": [str(p) for p in self.allowed_paths]},

@@ -125,8 +125,8 @@ class DocumentService:
         segments, _ = model.transcribe(str(path), language="fr", beam_size=5)
         return " ".join(segment.text for segment in segments).strip()
 
-    async def read(self, raw_path: str, requested_limit: Any = None) -> dict[str, Any]:
-        path = self.policy.resolve(raw_path)
+    async def read(self, raw_path: str, requested_limit: Any = None, *, session_id: str | None = None) -> dict[str, Any]:
+        path = self.policy.resolve(raw_path, session_id=session_id)
         limit = self._limit(requested_limit)
         kind = self.guess_type(path)
         size = path.stat().st_size
@@ -214,8 +214,8 @@ class DocumentService:
             "warnings": warnings,
         }
 
-    async def image_data(self, raw_path: str) -> dict[str, Any]:
-        path = self.policy.resolve(raw_path)
+    async def image_data(self, raw_path: str, *, session_id: str | None = None) -> dict[str, Any]:
+        path = self.policy.resolve(raw_path, session_id=session_id)
         if self.guess_type(path) != "image":
             raise ValidationError("read_image accepts image files only")
         if path.stat().st_size > 5 * 1024 * 1024:
@@ -229,8 +229,8 @@ class DocumentService:
             "data_url": f"data:{mime};base64,{encoded}",
         }
 
-    async def convert(self, raw_path: str, requested_limit: Any = None) -> dict[str, Any]:
-        path = self.policy.resolve(raw_path)
+    async def convert(self, raw_path: str, requested_limit: Any = None, *, session_id: str | None = None) -> dict[str, Any]:
+        path = self.policy.resolve(raw_path, session_id=session_id)
         limit = self._limit(requested_limit, 10000)
         text = self._markitdown().convert(str(path)).text_content
         return {
@@ -239,13 +239,13 @@ class DocumentService:
             "truncated": len(text) > limit,
         }
 
-    async def list_directory(self, raw_path: str, requested_limit: Any = None) -> dict[str, Any]:
-        path = self.policy.resolve(raw_path, expect="directory")
+    async def list_directory(self, raw_path: str, requested_limit: Any = None, *, session_id: str | None = None) -> dict[str, Any]:
+        path = self.policy.resolve(raw_path, expect="directory", session_id=session_id)
         limit = min(self._limit(requested_limit, 100), 1000)
         entries = []
         for entry in sorted(path.iterdir(), key=lambda item: item.name.casefold()):
             try:
-                if not self.policy.is_authorized(entry):
+                if not self.policy.is_authorized(entry, session_id=session_id):
                     continue
                 entries.append(
                     {
@@ -258,8 +258,8 @@ class DocumentService:
                 continue
         return {"path": str(path), "count": len(entries), "entries": entries[:limit], "truncated": len(entries) > limit}
 
-    async def info(self, raw_path: str) -> dict[str, Any]:
-        path = self.policy.resolve(raw_path, expect="any")
+    async def info(self, raw_path: str, *, session_id: str | None = None) -> dict[str, Any]:
+        path = self.policy.resolve(raw_path, expect="any", session_id=session_id)
         stat = path.stat()
         return {
             "name": path.name,
@@ -271,8 +271,8 @@ class DocumentService:
             "is_dir": path.is_dir(),
         }
 
-    async def search(self, raw_path: str, pattern: str, requested_limit: Any = None):
-        path = self.policy.resolve(raw_path)
+    async def search(self, raw_path: str, pattern: str, requested_limit: Any = None, *, session_id: str | None = None):
+        path = self.policy.resolve(raw_path, session_id=session_id)
         if not pattern:
             raise ValidationError("pattern cannot be empty")
         limit = min(self._limit(requested_limit, 20), 500)

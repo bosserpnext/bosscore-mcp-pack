@@ -3,7 +3,9 @@
 Roots are dynamic: static roots from BOSSCORE_FILE_ROOTS + dynamically added
 worktree paths registered via add_root() at runtime (PACTE-BOSS worktree isolation).
 
-Relative paths are resolved against the first registered root (canonical workspace).
+Session-aware: when session_id is passed, relative paths resolve against the
+session's worktree (preferred) or the canonical workspace (fallback).
+session_roots map prevents cross-session access.
 """
 from __future__ import annotations
 
@@ -18,16 +20,40 @@ class PathPolicy:
         if not roots:
             raise ValidationError("At least one authorized file root is required")
         self.roots: list[Path] = [root.resolve() for root in roots]
+        self.session_roots: dict[str, Path] = {}  # session_id → worktree root
         self.max_file_bytes = max_file_bytes
 
-    def add_root(self, path: str | Path) -> Path:
+    # ── Dynamic root management ──────────────────────────────────────────
+
+    def add_root(self, path: str | Path, *, session_id: str | None = None) -> Path:
         """Dynamically add an authorized root (e.g. worktree path after workspace_create).
+
+        If session_id is provided, the root is stored in session_roots for
+        per-session relative-path resolution and cross-session access control.
         Returns the resolved path. Idempotent — does not duplicate.
         """
         resolved = Path(path).expanduser().resolve()
+        if session_id:
+            self.session_roots[session_id] = resolved
         if resolved not in self.roots:
             self.roots.append(resolved)
         return resolved
+
+    def remove_root(self, path: str | Path, *, session_id: str | None = None) -> bool:
+        """Remove a dynamically added root (e.g. after worktree cleanup).
+
+        Returns True if removed, False if not found.
+        """
+        resolved = Path(path).expanduser().resolve()
+        if session_id and session_id in self.session_roots:
+            del self.session_roots[session_id]
+        try:
+            self.roots.remove(resolved)
+            return True
+        except ValueError:
+            return False
+
+    # ── Forbidden segments ───────────────────────────────────────────────
 
     @staticmethod
     def _has_forbidden_segment(path: Path) -> bool:
@@ -41,29 +67,65 @@ class PathPolicy:
             for index in range(len(parts) - 1)
         )
 
-    def is_authorized(self, path: Path) -> bool:
+    # ── Authorization ────────────────────────────────────────────────────
+
+    def _session_root(self, session_id: str | None) -> Path | None:
+        """Return the worktree root for a session, or None."""
+        if session_id and session_id in self.session_roots:
+            return self.session_roots[session_id]
+        return None
+
+    def is_authorized(self, path: Path, *, session_id: str | None = None) -> bool:
+        """Check if a path is within authorized roots.
+
+        With session_id: checks the session's worktree root FIRST, then static roots.
+        Without: checks static roots only.
+        """
         try:
             resolved = path.resolve(strict=True)
         except (FileNotFoundError, OSError):
             return False
-        return (
-            not self._has_forbidden_segment(resolved)
-            and any(resolved.is_relative_to(root) for root in self.roots)
-        )
+        if self._has_forbidden_segment(resolved):
+            return False
+        # Session worktree takes priority
+        root = self._session_root(session_id)
+        if root is not None and resolved.is_relative_to(root):
+            return True
+        return any(resolved.is_relative_to(r) for r in self.roots)
 
-    def resolve(self, raw_path: str, *, expect: str = "file") -> Path:
+    def resolve(
+        self,
+        raw_path: str,
+        *,
+        expect: str = "file",
+        session_id: str | None = None,
+    ) -> Path:
+        """Resolve and authorize a path.
+
+        Relative path resolution (in priority order):
+        1. Session worktree root (if session_id and worktree registered)
+        2. BOSSCORE_WORKSPACE (canonical repo)
+        3. Rejected if neither available
+
+        Absolute paths are authorized against the session root first,
+        then static roots. Cross-session worktree access is blocked.
+        """
         candidate = Path(raw_path).expanduser()
 
-        # ── Relative path — resolve against canonical workspace ──────────
+        # ── Relative path — resolve against session worktree or workspace ─
         if not candidate.is_absolute():
-            workspace = os.getenv("BOSSCORE_WORKSPACE", "")
-            if workspace:
-                candidate = Path(workspace) / candidate
+            root = self._session_root(session_id)
+            if root is not None:
+                candidate = root / candidate
             else:
-                raise PolicyViolation(
-                    "Relative path requires BOSSCORE_WORKSPACE to be set",
-                    details={"path": raw_path},
-                )
+                workspace = os.getenv("BOSSCORE_WORKSPACE", "")
+                if workspace:
+                    candidate = Path(workspace) / candidate
+                else:
+                    raise PolicyViolation(
+                        "Relative path requires session worktree or BOSSCORE_WORKSPACE",
+                        details={"path": raw_path, "session_id": session_id},
+                    )
 
         try:
             resolved = candidate.resolve(strict=True)
@@ -72,10 +134,16 @@ class PathPolicy:
 
         if self._has_forbidden_segment(resolved):
             raise PolicyViolation("This path belongs to a protected credentials area")
-        if not self.is_authorized(resolved):
+
+        # ── Session-aware authorization ───────────────────────────────
+        if not self.is_authorized(resolved, session_id=session_id):
             raise PolicyViolation(
                 "Path is outside authorized roots",
-                details={"path": str(resolved), "roots": [str(root) for root in self.roots]},
+                details={
+                    "path": str(resolved),
+                    "roots": [str(r) for r in self.roots],
+                    "session_id": session_id,
+                },
             )
         if expect == "file" and not resolved.is_file():
             raise ValidationError(f"Not a file: {resolved}")
